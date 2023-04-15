@@ -1,3 +1,4 @@
+
 #!/usr/bin/perl
 #
 # ISASimple metadata file validator
@@ -17,11 +18,8 @@
 
 use strict;
 use warnings;
-# use lib "$ENV{GUS_HOME}/lib/perl";
 use File::Basename;
 use Text::CSV;
-use Data::Dumper;
-use open ':std', ':encoding(UTF-8)';
 
 my $MAXCOLS = 999;
 my $MAXLENGTH = 1000;
@@ -32,9 +30,10 @@ my %FORMAT = (
   '.CSV' => ",",
 );
 
-# args: list of files
-# or, get list from stdin
-#
+usage() unless scalar(@ARGV) == 2;
+
+my ($inputDir, $outputDir) = @_;
+
 my @files = @ARGV;
 unless(@files){
   while(<>){
@@ -56,18 +55,15 @@ foreach my $filepath (@files){
   my ($path, $name, $ext) = fileparse($filepath, qr/\.[^\.]*$/);
   my $filename = basename($filepath);
   unless( $ext && $FORMAT{ uc($ext) } ){
-    #testResult('FAIL', $filename, "Unsupported file extension $ext";
     testResult('FAIL', $filename, "Unsupported file extension $ext");
     next;
   }
   my $delim = $FORMAT{uc($ext)};
   unless( -e $filepath ){
-    #testResult('FAIL', $filename, "File not found";
     testResult('FAIL', $filename, "File not found");
     next;
   }
   unless( -f $filepath ){
-    #testResult('FAIL', $filename, "File not a plain file (may be link, pipe, directory, etc.)";
     testResult('FAIL', $filename, "File not a plain file (may be link, pipe, directory, etc.)");
     next;
   }
@@ -76,13 +72,18 @@ foreach my $filepath (@files){
     testResult('FAIL', $filename, "Binary file; only text is supported");
     next;
   }
+
   my $ifh;
-  unless( open($ifh, "<$filepath")){
-    testResult('FAIL', $filename, "Cannot read file: $@");
+  open($ifh, "<$filepath") || die "Cannot read file '$filepath' : $!\n";
+
+  my $csv = Text::CSV->new({binary => 1, sep_char => $delim, quote_char => '"' });
+
+  unless ($csv) {
+    testResult('FAIL', $filename, "Invalid CSV file " . Text::CSV->error_diag ());
+    close($ifh);
     next;
   }
-  
-  my $csv = Text::CSV->new({binary => 1, sep_char => $delim, quote_char => '"' }) or die "Cannot use CSV: " . Text::CSV->error_diag ();  
+
   my $headers = $csv->getline( $ifh );
   unless($headers) {
     testResult('FAIL', $filename, "unreadable, possibly not a plain text file");
@@ -105,7 +106,7 @@ foreach my $filepath (@files){
   # Validate file headers
   foreach my $header (@$headers){
     unless($header =~ m{^(.[A-Za-z][A-Za-z_.0-9]*|[A-Za-z][A-Za-z_.0-9]*)$}){
-      testResult('WARN', $filename, "Illegal column header: must start with letter, or dot '.' not followed by a number, and contains only letters, numbers, underscore '_', or period '.' (illegal characters include space, dash, parentheses, etc.) - illegal characters will be automatically converted to underscore '_'");
+      testResult('FAIL', $filename, "Illegal column header: must start with letter, or dot '.' not followed by a number, and contains only letters, numbers, underscore '_', or period '.' (illegal characters include space, dash, parentheses, etc.) - illegal characters will be automatically converted to underscore '_'");
     }
   }
   my $lines = 0;
@@ -137,16 +138,8 @@ foreach my $filepath (@files){
 
 while( my ($filename, $failures) = each %{$results->{FAIL}}){
   foreach my $message (@$failures){
-    printf STDERR ("FAIL: %s\t%s\n", $filename, $message);
+    printf STDOUT ("FAIL: %s\t%s\n", $filename, $message);
     $exitcode++;
-  }
-}
-# while( my ($filename, $message) = each %{$results->{PASS}}){
-#   printf STDOUT ("%s\t%s\tPASS\n", $filename, $message)
-# }
-while( my ($filename, $warnings) = each %{$results->{WARN}}){
-  foreach my $message (@$warnings){
-    printf STDOUT ("WARNING: %s\t%s\n", $filename, $message)
   }
 }
 
