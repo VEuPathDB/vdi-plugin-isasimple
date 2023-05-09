@@ -1,14 +1,13 @@
-!/usr/bin/env bash
+#!/usr/bin/env bash
 
 # exit when any command fails
 set -e
 
 userDatasetId=$1
 inputDir=$2;
-metadataFile=$3
 
-if [ -z "\$inputDir" ] || [ -z "\$userDatasetId" ] || [ -z "\$metadataFile" ]; then
-    echo "Usage: install-data user_dataset_id inputDir meta_json_file."
+if [ -z $inputDir ] || [ -z $userDatasetId ]; then
+    echo "Usage: install-data user_dataset_id inputDir"
     exit 255
 fi
 

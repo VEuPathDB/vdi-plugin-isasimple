@@ -1,13 +1,15 @@
 !/usr/bin/env bash
 
+# THIS SCRIPT NEEDS TO BE UPGRADED TO ALLOW BOTH INSTALL AND UPDATE
+
 # exit when any command fails
 set -e
 
 userDatasetId=$1
-metadataFile=$3
+metadataFile=$2
 
-if [ -z "\$userDatasetId" ] || [ -z "\$metadataFile" ]; then
-    echo "Usage: install-data user_dataset_id inputDir meta_json_file."
+if [ -z $userDatasetId ] || [ -z $metadataFile ]; then
+    echo "Usage: install-data user_dataset_id meta_json_file."
     exit 255
 fi
 
@@ -15,74 +17,11 @@ makeGusConfigFile temp_gus.config
 
 export NLS_LANG='AMERICAN_AMERICA.UTF8';
 
-exportInvestigation.pl -a -m $inputDir
-
-# basename of last directory modified
-study="$(basename $(\ls -1dt ./*/ | head -n 1))"    # WHAT IS THIS DOING?
-
-ontologyTermsToTabDelim.pl ${study}/ontologyMapping.xml ${study}
-
-ga GUS::Supported::Plugin::InsertExternalDatabase --name $study --commit --gusconfigfile temp_gus.config --gus;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName $study --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
-
-ga GUS::Supported::Plugin::InsertExternalDatabase --name "${study}_terms" --commit --gusconfigfile temp_gus.config;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName "${study}_terms" --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
-
-ga GUS::Supported::Plugin::InsertOntologyFromTabDelim \
-    --termFile $study/ontology_terms.txt \
-    --relFile $study/ontology_relationships.txt \
-    --relTypeExtDbRlsSpec "Ontology_Relationship_Types_RSRC|1.3" \
-    --extDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
-
-#touch $PWD/$study/valueMapping.txt
-#touch $PWD/$study/termOverride.xml
-
-ga ApiCommonData::Load::Plugin::InsertEntityGraph \
-    --metaDataRoot $PWD \
-    --investigationSubset $study \
-    --investigationBaseName investigation.xml \
-    --isSimpleConfiguration \
-    --ontologyMappingFile $PWD/$study/ontologyMapping.xml \
-    --extDbRlsSpec "${study}|dontcare" \
-    --dateObfuscationFile $PWD/$study/dateObfuscation.txt \
-    --schema ApidbUserDatasets \
-    --userDatasetId $userDatasetId \
-    --commit
-    --gusconfigfile temp_gus.config #    --valueMappingFile $PWD/$study/valueMapping.txt  --ontologyMappingOverrideFileBaseName termOverride.xml
-
-
-ga ApiCommonData::Load::Plugin::LoadAttributesFromEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --logDir $PWD \
-    --runRLocally \
-    --commit
-    --gusconfigfile temp_gus.config
-
-ga ApiCommonData::Load::Plugin::LoadEntityTypeAndAttributeGraphs \
-    --logDir $PWD \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
-
- ga ApiCommonData::Load::Plugin::LoadDatasetSpecificEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --commit
-    --gusconfigfile temp_gus.config
-
  ga ApiCommonData::Load::Plugin::InsertUserDatasetAttributes \
      --userDatasetId $userDatasetId \
      --metadataFile $metadataFile \
      --commit
      --gusconfigfile temp_gus.config
 
- # clean out tables not used by the application with partial delete
- deleteStudy.pl $userDatasetId 1
  
 
