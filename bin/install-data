@@ -15,10 +15,9 @@ makeGusConfigFile temp_gus.config
 
 export NLS_LANG='AMERICAN_AMERICA.UTF8';
 
-exportInvestigation.pl -a -m $inputDir
+exportInvestigation.pl -a -m $inputDir -t $userDatasetId
 
-# basename of last directory modified
-study="$(basename $(\ls -1dt ./*/ | head -n 1))"    # WHAT IS THIS DOING?
+study=$userDatasetId # just needs to be unique
 
 ontologyTermsToTabDelim.pl ${study}/ontologyMapping.xml ${study}
 
