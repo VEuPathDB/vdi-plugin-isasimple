@@ -1,118 +1,118 @@
 #!/usr/bin/perl
-#
-# ISASimple metadata file validator
-#
-# Input args: list of files
-# Exit code: 0 success, 1+ number of failurs
-# STDERR lists PASS/FAIL + failure messages
-#
-# Validator tests for:
-# - Supported file format / extension
-# - File exists
-# - Can be parsed by Perl package Text::CSV
-# - Minimum number of columns
-#   - failure may indicate parse error, e.g. extention:delimiter mismatch
-# - Minimum number of rows
-#
 
 use strict;
 use warnings;
-# use lib "$ENV{GUS_HOME}/lib/perl";
 use File::Basename;
 use Text::CSV;
 use Data::Dumper;
-use open ':std', ':encoding(UTF-8)';
+use File::Copy;
 
 my $MAXCOLS = 999;
 my $MAXLENGTH = 1000;
+my $VALIDATION_ERR_CODE = 1;
 
-my %FORMAT = (
-  '.TXT' => "\t",
-  '.TSV' => "\t",
-  '.CSV' => ",",
-);
+my @validExtensions = ('.txt', '.tsv', '.csv');
 
-# args: list of files
-# or, get list from stdin
-#
-my @files = @ARGV;
-unless(@files){
-  while(<>){
-    chomp;
-    push(@files, $_);
-  }
+sub usage {
+    die "
+Usage: import input_dir output_dir
+
+Prepare and validate an ISA Simple dataset for import.
+
+input_dir: must contain the original dataset files, and no other files.
+output_dir: will contain the import-ready set of files.  In this case, the same as input.
+
+If there is a validation error, exit with status $VALIDATION_ERR_CODE.  STDOUT will contain the user-appropriate validation error message
+
+Validator tests for:
+ - Supported file format / extension
+ - File exists
+ - Can be parsed by Perl package Text::CSV
+ - Minimum number of columns
+   - failure may indicate parse error, e.g. extention:delimiter mismatch
+ - Minimum number of rows
+";
 }
 
-unless(@files){
-  printf STDERR ("No files to validate\n");
-  exit 0;
-}
+usage() unless scalar(@ARGV) == 2;
 
-my $exitcode = 0;
+my ($inputDir, $outputDir) = @ARGV;
 
-my $results = { FAIL => {}, PASS => {}};
+opendir(my $dh, $outputDir) or die "can't open dir '$outputDir'\n";;
+my $numOutputFiles = () = readdir($dh);
+die "Output dir '$outputDir' must be empty\n" if $numOutputFiles != 2; # . and .. are always present
+close($dh);
 
-foreach my $filepath (@files){
-  my ($path, $name, $ext) = fileparse($filepath, qr/\.[^\.]*$/);
-  my $filename = basename($filepath);
-  unless( $ext && $FORMAT{ uc($ext) } ){
-    #testResult('FAIL', $filename, "Unsupported file extension $ext";
-    testResult('FAIL', $filename, "Unsupported file extension $ext");
+opendir($dh, $inputDir) or die "can't open dir '$inputDir'\n";;
+my @files = readdir($dh);
+die "inputDir '$inputDir' is empty)" unless scalar(@files) > 2;
+
+my $results = {};
+
+foreach my $filename (@files) {
+  next if $filename =~ /\.$/; # skip . and ..
+  unless ($filename =~ /.*(\.\w\w\w)$/ && grep(lc($1), @validExtensions)) {
+    trackValidationError($filename, "Invalid file format.  Must have extension a valid extension: " . join(", ", @validExtensions));
     next;
   }
-  my $delim = $FORMAT{uc($ext)};
+  my $extension = lc($1);
+  my $delim = $extension eq '.csv'? "," : "\t";
+  my $filepath = "$inputDir/$filename";
+
   unless( -e $filepath ){
-    #testResult('FAIL', $filename, "File not found";
-    testResult('FAIL', $filename, "File not found");
+    trackValidationError($filepath, "File not found");
     next;
   }
+
   unless( -f $filepath ){
-    #testResult('FAIL', $filename, "File not a plain file (may be link, pipe, directory, etc.)";
-    testResult('FAIL', $filename, "File not a plain file (may be link, pipe, directory, etc.)");
+    trackValidationError($filename, "File not a plain file (may be link, pipe, directory, etc.)");
     next;
   }
 
   if(-B $filepath){
-    testResult('FAIL', $filename, "Binary file; only text is supported");
+    trackValidationError($filename, "Binary file; only text is supported");
     next;
   }
+
   my $ifh;
-  unless( open($ifh, "<$filepath")){
-    testResult('FAIL', $filename, "Cannot read file: $@");
-    next;
-  }
-  
-  my $csv = Text::CSV->new({binary => 1, sep_char => $delim, quote_char => '"' }) or die "Cannot use CSV: " . Text::CSV->error_diag ();  
-  my $headers = $csv->getline( $ifh );
-  unless($headers) {
-    testResult('FAIL', $filename, "unreadable, possibly not a plain text file");
+  open($ifh, "<$filepath") || die "Cannot read file '$filepath' : $!\n";
+
+  my $csv = Text::CSV->new({binary => 1, sep_char => $delim, quote_char => '"' });
+
+  unless ($csv) {
+    trackValidationError($filename, "Invalid file " . Text::CSV->error_diag ());
     close($ifh);
     next;
   }
 
-  if(@$headers < 2 ){ ## check headers
-    testResult('FAIL', $filename, "Only one column header found; check file format and delimiter");
+  my $headers = $csv->getline( $ifh );
+  unless($headers) {
+    trackValidationError($filename, "unreadable, possibly not a plain text file");
+    close($ifh);
+    next;
+  }
+
+  if(@$headers < 2 ) { ## check headers
+    trackValidationError($filename, "Header has only one column.  Check file format and delimiter");
     close($ifh);
     next;
   }
   if(@$headers > $MAXCOLS ){ ## check headers
     my $numcols = scalar @$headers;
-    testResult('FAIL', $filename, "Too many columns ($numcols), limit is $MAXCOLS columns");
+    trackValidationError($filename, "Too many columns ($numcols), limit is $MAXCOLS columns");
     close($ifh);
     next;
   }
 
-  # Validate file headers
-  foreach my $header (@$headers){
-    unless($header =~ m{^(.[A-Za-z][A-Za-z_.0-9]*|[A-Za-z][A-Za-z_.0-9]*)$}){
-      testResult('WARN', $filename, "Illegal column header: must start with letter, or dot '.' not followed by a number, and contains only letters, numbers, underscore '_', or period '.' (illegal characters include space, dash, parentheses, etc.) - illegal characters will be automatically converted to underscore '_'");
-    }
-  }
   my $lines = 0;
   my %maxlen;
   eval {
     while(my $row = $csv->getline( $ifh )) {
       $lines++;
+      if (scalar(@$row) != scalar(@$headers)) {
+	trackValidationError($filename, "Row $lines has incorrect number of columns");
+	last;
+      }
       foreach my $col (@$headers){
         my $len = length( shift(@$row) );
         $maxlen{$col} ||= $len;
@@ -123,38 +123,35 @@ foreach my $filepath (@files){
     }
   };
   close($ifh);
+
   unless($lines){ ## Text::CSV threw an error
-    testResult('FAIL', $filename, "Empty (no data rows)");
+    trackValidationError($filename, "Empty (no data rows)");
   }
   else {
     foreach my $col (@$headers){
       if($maxlen{$col} > $MAXLENGTH){
-        testResult('FAIL', $filename, "Column \"$col\" values have a maximum length of $maxlen{$col} characters, limit is $MAXLENGTH");
+        trackValidationError($filename, "Column \"$col\" values have a maximum length of $maxlen{$col} characters, limit is $MAXLENGTH");
       }
     }
   }
+
+  copy($filepath, "$outputDir/$filename");
+
 }
 
-while( my ($filename, $failures) = each %{$results->{FAIL}}){
+my $invalidCount = 0;
+while( my ($filename, $failures) = each %{$results}){
   foreach my $message (@$failures){
-    printf STDERR ("FAIL: %s\t%s\n", $filename, $message);
-    $exitcode++;
-  }
-}
-# while( my ($filename, $message) = each %{$results->{PASS}}){
-#   printf STDOUT ("%s\t%s\tPASS\n", $filename, $message)
-# }
-while( my ($filename, $warnings) = each %{$results->{WARN}}){
-  foreach my $message (@$warnings){
-    printf STDOUT ("WARNING: %s\t%s\n", $filename, $message)
+    printf STDOUT ("%s\t%s\n", $filename, $message);
+    $invalidCount++;
   }
 }
 
-exit ($exitcode > 0);
+exit $VALIDATION_ERR_CODE if ($invalidCount > 0);
 
 
-sub testResult {
-  my ($type, $filename, $message) = @_;
-  $results->{$type}->{$filename} //= [];
-  push( @{ $results->{$type}->{$filename} }, $message ); 
+sub trackValidationError {
+  my ($filename, $message) = @_;
+  $results->{$filename} //= [];
+  push( @{ $results->{$filename} }, $message );
 }
