@@ -1,4 +1,4 @@
-FROM veupathdb/vdi-plugin-base:1.0.1
+FROM veupathdb/vdi-plugin-base:1.0.3
 
 COPY bin/ /opt/veupathdb/bin
 
@@ -11,4 +11,4 @@ RUN export LIB_GIT_COMMIT_SHA=4fcd4f3183f8decafe7a0d0a8a8400470c7f9222\
     && mkdir -p /opt/veupathdb/lib/perl \
     && cp lib/perl/VdiStudyHandlerCommon.pm /opt/veupathdb/lib/perl \
     && cp bin/* /opt/veupathdb/bin
-    
+
