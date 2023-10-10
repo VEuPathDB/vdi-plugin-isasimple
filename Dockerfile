@@ -1,4 +1,4 @@
-FROM veupathdb/vdi-plugin-base:1.0.13
+FROM veupathdb/vdi-plugin-base:1.0.15
 
 COPY bin/ /opt/veupathdb/bin
 
