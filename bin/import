@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+
+set -e
+
+function confReplace() {
+  sed -i "s#$1.*#$2#" $GUS_CONFIG
+}
+
+DB_NAME=`date +%Y%M%d%H%m%S`
+GUS_CONFIG=$PWD/gus.config
+GEO_MAPPINGS=/usr/local/lib/xml/geoMappings.xml
+
+echo "WORKING Directory = ${PWD}"
+
+cp $GUS_HOME/config/gus.config $GUS_CONFIG
+confReplace "${TEMPLATE_DB_NAME}" "$DB_NAME"
+
+echo "MAKING database ${DB_NAME}"
+createdb -T $TEMPLATE_DB_NAME -U postgres $DB_NAME
+
+echo "Start Loading..."
+writeNextflowConfig --workdir ${PWD} \
+  --gusConfigFile $GUS_CONFIG \
+  --name $DB_NAME \
+  --geoMappings $GEO_MAPPINGS \
+  >nextflow.config
