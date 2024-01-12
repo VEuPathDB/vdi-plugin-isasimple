@@ -1,14 +1,14 @@
-
 FROM veupathdb/vdi-plugin-base:2.0.4
+
 
 COPY bin /usr/bin/
 COPY lib/xml/* /usr/local/lib/xml/
 
 workdir ${PROJECT_HOME}
 
-ARG APICOMMONDATA_COMMIT_HASH=3b4c40f1fe06880c34df4c4616ad8da3239e85fd \
+ARG APICOMMONDATA_COMMIT_HASH=84c0a9ba299ecacea2067540770ad48b491f8344 \
     CLINEPIDATA_GIT_COMMIT_SHA=0c2758f64b67cb8504b30616b37d79a649e18d48 \
-    EDA_NEXTFLOW_GIT_COMMIT_SHA=9614218ad998ece62c67ce7bb14837c07bb8ab6a
+    EDA_NEXTFLOW_GIT_COMMIT_SHA=32fee3254b229b00ee3ee5a0007e81e977f8042d
 
 ENV PATH=${PROJECT_HOME}/install/bin:${GUS_HOME}/bin:$PATH
 
@@ -17,8 +17,11 @@ RUN perl -MCPAN -e 'install qq(Switch)' \
    && perl -MCPAN -e 'install qq(Text::Unidecode)' \
    && perl -MCPAN -e 'install qq(XML::Simple)'
 
-RUN /usr/bin/install.bash
+RUN /usr/bin/buildGus.bash
 
+RUN wget -O fbw.zip https://github.com/VEuPathDB/script-find-bin-width/releases/download/v0.5.1/fbw-linux-0.5.1.zip \
+    && unzip fbw.zip \
+    && mv find-bin-width /usr/bin/find-bin-width
 
 # RUN export LIB_GIT_COMMIT_SHA=4fcd4f3183f8decafe7a0d0a8a8400470c7f9222\
 #     && git clone https://github.com/VEuPathDB/lib-vdi-plugin-study.git \

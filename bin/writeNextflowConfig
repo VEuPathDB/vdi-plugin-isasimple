@@ -4,12 +4,13 @@ use strict;
 
 use Getopt::Long;
 
-my ($workDir, $gusConfigFile, $name, $geoMappings);
+my ($workDir, $gusConfigFile, $name, $geoMappings, $resultsDir);
 
 GetOptions('workDir=s' => \$workDir,
            'gusConfigFile=s' => \$gusConfigFile,
            'name=s' => \$name,
            'geoMappings=s' => \$geoMappings,
+           'resultsDir=s' => \$resultsDir
     );
 
 my $studyExtDbSpec = "Study_${name}|1";
@@ -18,6 +19,10 @@ my $schema = "ApidbUserDatasets";
 my $isaFormat = "simple";
 my $mappingFileBaseName = "ontologyMapping.xml";
 my $investigationFileBaseName = "investigation.xml";
+
+my $dateObfuscationFile = "$workDir/dateObfuscation";
+open(DATE, ">$dateObfuscationFile") or die "Cannot open file $dateObfuscationFile for writing: $!";
+close DATE;
 
 print <<CONFIG
 params.studyDirectory = "$workDir"
@@ -36,7 +41,7 @@ params.webDisplayOntologyFile = "$workDir/$name/$mappingFileBaseName"
 params.investigationBaseName = "$investigationFileBaseName"
 
 // optional files when isaFormat = simple
-params.optionalDateObfuscationFile = "NA"
+params.optionalDateObfuscationFile = "$dateObfuscationFile"
 params.optionalValueMappingFile = "NA"
 params.investigationSubset = "$name"
 
@@ -58,7 +63,7 @@ params.optionalAnnotationPropertiesFile = "NA"
 
 // where to write download files.
 params.downloadFileBaseName = "NA"
-params.resultsDirectory = "$workDir/results"
+params.resultsDirectory = "${resultsDir}"
 
 // popbio species reconcilliation
 params.speciesReconciliationOntologySpec = "NA"
@@ -68,7 +73,15 @@ params.gusConfigFile = "$gusConfigFile"
 
 params.optionalGadmDataDirectory = "NA"
 params.optionalGadmSocketDirectory = "NA"
-params.optionalGadmport = "NA"
+params.optionalGadmPort = "NA"
+
+params.optionalCollectionsYaml = "NA"
+
+params.useOntologyTermTableForTaxonTerms = "NA"
+params.loadProtocolTypeAsVariable = false
+
+params.protocolVariableSourceId = "NA"
+params.noCommonDef = false
 
 trace.enabled = false
 trace.fields = 'task_id,hash,process,tag,status,exit,submit,realtime,%cpu,rss'

@@ -2,15 +2,20 @@
 
 set -e
 
+WORKING_DIR=$1
+RESULTS_DIR=$2
+
 function confReplace() {
   sed -i "s#$1.*#$2#" $GUS_CONFIG
 }
 
+cd $WORKING_DIR
+
 DB_NAME=`date +%Y%M%d%H%m%S`
-GUS_CONFIG=$PWD/gus.config
+GUS_CONFIG=$WORKING_DIR/gus.config
 GEO_MAPPINGS=/usr/local/lib/xml/geoMappings.xml
 
-echo "WORKING Directory = ${PWD}"
+echo "WORKING Directory = ${WORKING_DIR}"
 
 cp $GUS_HOME/config/gus.config $GUS_CONFIG
 confReplace "${TEMPLATE_DB_NAME}" "$DB_NAME"
@@ -18,9 +23,19 @@ confReplace "${TEMPLATE_DB_NAME}" "$DB_NAME"
 echo "MAKING database ${DB_NAME}"
 createdb -T $TEMPLATE_DB_NAME -U postgres $DB_NAME
 
-echo "Start Loading..."
-writeNextflowConfig --workdir ${PWD} \
+echo "Write Config ..."
+writeNextflowConfig --workdir ${WORKING_DIR} \
   --gusConfigFile $GUS_CONFIG \
   --name $DB_NAME \
   --geoMappings $GEO_MAPPINGS \
-  >nextflow.config
+  --resultsDir ${RESULTS_DIR} \
+  >${WORKING_DIR}/nextflow.config
+
+echo "Begin Loading ..."
+nextflow -C ${WORKING_DIR}/nextflow.config \
+  run $PROJECT_HOME/eda-nextflow/main.nf \
+  -ansi-log false \
+  -entry loadUserDataset
+
+echo "Dropping Database ${DB_NAME}"
+dropdb -f -U postgres ${DB_NAME}
