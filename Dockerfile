@@ -6,7 +6,7 @@ COPY lib/xml/* /usr/local/lib/xml/
 
 workdir ${PROJECT_HOME}
 
-ARG APICOMMONDATA_COMMIT_HASH=84c0a9ba299ecacea2067540770ad48b491f8344 \
+ARG APICOMMONDATA_COMMIT_HASH=9a2fa42f166f8d7effed3e245863534bffedfda4 \
     CLINEPIDATA_GIT_COMMIT_SHA=0c2758f64b67cb8504b30616b37d79a649e18d48 \
     EDA_NEXTFLOW_GIT_COMMIT_SHA=32fee3254b229b00ee3ee5a0007e81e977f8042d
 
@@ -39,7 +39,5 @@ RUN wget -O fbw.zip https://github.com/VEuPathDB/script-find-bin-width/releases/
 # corruption.
 # NOTE:  I'm pretty sure this is not working... docker stop should produce some output about pg_ctl stop command but i don't see it
 STOPSIGNAL SIGINT
-
-workdir /isasimple-data
 
 ENTRYPOINT startPostGreSQLServer.bash
