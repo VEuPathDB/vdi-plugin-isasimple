@@ -15,7 +15,7 @@ my @validExtensions = ('.txt', '.tsv', '.csv');
 
 sub usage {
     die "
-Usage: import input_dir
+Usage: validateUserFiles input_dir
 
 Validate an ISA Simple dataset for import.
 
