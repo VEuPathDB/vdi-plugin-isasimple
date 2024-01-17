@@ -35,7 +35,8 @@ Validator tests for:
 
 usage() unless scalar(@ARGV) == 1;
 
-my ($inputDir) = @ARGV;
+my ($inputDir, $dh) = @ARGV;
+
 
 opendir($dh, $inputDir) or die "can't open dir '$inputDir'\n";;
 my @files = readdir($dh);
