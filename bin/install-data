@@ -1,86 +1,199 @@
-#!/usr/bin/env bash
+#!/usr/bin/perl
+use DBI;
+use DBI qw(:sql_types);
+use Time::HiRes qw ( time );
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use JSON qw( decode_json );
+use File::Copy;
 
-# exit when any command fails
-set -e
+my $SQLLDR_STREAM_SIZE = 512000;
+my $SQLLDR_ROWS = 5000;
+my $SQLLDR_BINDSIZE = 2048000;
+my $SQLLDR_READSIZE = 1048576;
 
-userDatasetId=$1
-inputDir=$2;
+my @envVars = ('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_PLATFORM', 'DB_USER', 'DB_PASS', 'DB_SCHEMA', 'DATA_FILES');
 
-if [ -z $inputDir ] || [ -z $userDatasetId ]; then
-    echo "Usage: install-data user_dataset_id inputDir"
-    exit 255
-fi
+my ($userDatasetId, $inputDir) = @ARGV;
 
-makeGusConfigFile temp_gus.config
+usage() unless scalar(@ARGV) == 2;
 
-export NLS_LANG='AMERICAN_AMERICA.UTF8';
+for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
+my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}", $ENV{DB_USER}, $ENV{DB_PASS})
+    || die "Couldn't connect to database: " . DBI->errstr;
+$dbh->{RaiseError} = 1;
+$dbh->{AutoCommit} = 0;
 
-exportInvestigation.pl -a -m $inputDir -t $userDatasetId
+my $indxTableSpace = $ENV{DB_PLATFORM} eq 'Oracle'? " tablespace indx" : "";
 
-study=$userDatasetId # just needs to be unique
+my $installJsonFile = "$inputDir/install.json";
 
-ontologyTermsToTabDelim.pl ${study}/ontologyMapping.xml ${study}
+die "No install.json file found." unless -e $installJsonFile;
 
-ga GUS::Supported::Plugin::InsertExternalDatabase --name $study --commit --gusconfigfile temp_gus.config --gus;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName $study --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
+# parse json file of table/index/view configurations
+open my $fh, '<', $installJsonFile or die "error opening $installJsonFile: $!";
+my $configsArray = do { local $/; <$fh> };
 
-ga GUS::Supported::Plugin::InsertExternalDatabase --name "${study}_terms" --commit --gusconfigfile temp_gus.config;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName "${study}_terms" --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
+# validate that we have all needed files
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'table';
+  my $cacheFile = "$config->{name}.cache";
+  die "Can't find $cacheFile" unless -e "$cacheFile";
+}
 
-ga GUS::Supported::Plugin::InsertOntologyFromTabDelim \
-    --termFile $study/ontology_terms.txt \
-    --relFile $study/ontology_relationships.txt \
-    --relTypeExtDbRlsSpec "Ontology_Relationship_Types_RSRC|1.3" \
-    --extDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
+# write json file to data files dir (do this first, because it's needed to control an uninstall)
+my $datasetDir = $ENV{DATA_FILES};
+die "Dataset target dir $datasetDir already exists\n" if -e $datasetDir;
+mkdir($datasetDir) || die "Failed creating dataset target dir $datasetDir\n";
+chmod(0775, $datasetDir) || die "Failed chmod of $datasetDir\n"; # rwxrwxr-x
 
-#touch $PWD/$study/valueMapping.txt
-#touch $PWD/$study/termOverride.xml
+# loop through tables
+# if not preexisting, create table
+# use bulk loader to load rows
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'table';
+  unless ($config->{is_preexisting_table}) {
+    createTable($dbh, $ENV{DB_SCHEMA}, $config);
+  }
+  my $cacheFile = "$config->{name}.cache";
+  loadTable($ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $tableConfig);
+}
 
-ga ApiCommonData::Load::Plugin::InsertEntityGraph \
-    --metaDataRoot $PWD \
-    --investigationSubset $study \
-    --investigationBaseName investigation.xml \
-    --isSimpleConfiguration \
-    --ontologyMappingFile $PWD/$study/ontologyMapping.xml \
-    --extDbRlsSpec "${study}|dontcare" \
-    --dateObfuscationFile $PWD/$study/dateObfuscation.txt \
-    --schema ApidbUserDatasets \
-    --userDatasetId $userDatasetId \
-    --commit
-    --gusconfigfile temp_gus.config #    --valueMappingFile $PWD/$study/valueMapping.txt  --ontologyMappingOverrideFileBaseName termOverride.xml
+# loop through indexes
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'index';
+  my $tableName = "?";
+  createIndex($dbh, $ENV{DB_SCHEMA}, $tableName, $config, $indxTableSpace);
+}
 
+# loop through views
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'view';
+  createView($dbh, $ENV{DB_SCHEMA}, $config);
+}
 
-ga ApiCommonData::Load::Plugin::LoadAttributesFromEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --logDir $PWD \
-    --runRLocally \
-    --commit
-    --gusconfigfile temp_gus.config
+=pod
 
-ga ApiCommonData::Load::Plugin::LoadEntityTypeAndAttributeGraphs \
-    --logDir $PWD \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
+create table VDI_DATASETS_&1..UD_GeneId (
+USER_DATASET_ID          VARCHAR2(32),
+gene_SOURCE_ID                             VARCHAR2(100),
+FOREIGN KEY (user_dataset_id) REFERENCES VDI_CONTROL_&1..dataset(dataset_id)
+);
 
- ga ApiCommonData::Load::Plugin::LoadDatasetSpecificEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --commit
-    --gusconfigfile temp_gus.config
+CREATE unique INDEX VDI_DATASETS_&1..UD_GENEID_idx1 ON VDI_DATASETS_&1..UD_geneid (user_dataset_id, gene_source_id) tablespace indx;
 
- ga ApiCommonData::Load::Plugin::InsertUserDatasetAttributes \
-     --userDatasetId $userDatasetId \
-     --metadataFile $metadataFile \
-     --commit
-     --gusconfigfile temp_gus.config
+GRANT insert, select, update, delete ON VDI_DATASETS_&1..UD_GeneId TO vdi_w;
+GRANT select ON VDI_DATASETS_&1..UD_GeneId TO gus_r;
 
- # clean out tables not used by the application with partial delete
- deleteStudy.pl $userDatasetId 1
- 
+=cut
+
+sub createTable {
+  my ($dbh, $schema, $tableConfig) = @_;
+
+  my $tableName = $schema.$table->{name};
+  my $cols = createColumns($table);
+
+  my $create = "
+CREATE TABLE $tableName (
+$cols
+)
+";
+  $dbh->execute($create);
+  my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
+  $dbh->execute($grantVdiW);
+  my $grantGusR = "GRANT SELECT on $tableName to gus_r";
+  $dbh->execute($grantGusR);
+}
+
+sub loadTable {
+  my ($platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
+
+  if ($platform eq 'Oracle') {
+    my $controlFileName = $tableConfig->{name} . '.ctrl';
+    writeSqlloaderCtl($orderedFields, $tableName, $ctlFileName, $dataFileName, $append);
+    my $logFileName = $tableConfig->{name} . '.log';
+    my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
+    my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
+    system($cmdLine) && die "Failed running $cmdLine $!";
+   }
+}
+
+sub createIndex {
+  my ($dbh, $schema, $tableName, $indexConfig, $indxTableSpace) = @_;
+
+  my $indexName = $schema.$indexConfig->{name};
+  my @colArray = $indexConfig->{orderedColumns};
+  my $cols = join(", ", @colArray);
+  my $createIndex = "CREATE INDEX $indexName on $tableName ($cols) $indxTableSpace";
+  $dbh->execute($createIndex);
+}
+
+sub createView {
+  my ($dbh, $schema, $viewConfig) = @_;
+
+  my $viewName = $schema.$viewConfig->{name};
+  my $def = $schema.$viewConfig->{definition};
+  my $createView = "CREATE VIEW $viewName as $def";
+  $dbh->execute($createView);
+}
+
+sub bulkLoadOracle {
+  my @udIdArray;
+  my @geneIdArray;
+  my $batchExecutor = new DbiBatchExecutor(100, 1000);
+  while(<F>) {
+    chomp;
+    push(@udIdArray, $userDatasetId);
+    push(@geneIdArray, $_);
+    $batchExecutor->periodicallyExecuteBatch($dbh, $sth, 0, [SQL_VARCHAR, SQL_VARCHAR], \@udIdArray, \@geneIdArray);
+  }
+  $batchExecutor->periodicallyExecuteBatch($dbh, $sth, 1, [SQL_VARCHAR, SQL_VARCHAR], \@udIdArray, \@geneIdArray);
+}
+
+sub getSqlLdrCmdLine {
+  my ($login, $password, $host, $port, $dbname, $controlFileName, $logFileName, $direct) = @_;
+
+  my $connectStr = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SID=$dbname)))";
+
+  my $cmd = "sqlldr $login/$password\@$connectStr control=$controlFileName errors=0 discardmax=0 log=$logFileName";
+  $cmd .= $direct?
+    "streamsize=512000 direct=TRUE" :
+    "rows=5000 bindsize=2048000 readsize=1048576";
+
+  return $cmd . ' >/dev/null 2>&1';
+}
+
+sub writeSqlloaderCtl {
+  my ($orderedFields, $tableName, $ctlFileName, $dataFileName, $append) = @_;
+
+  my @colSpecs;
+  foreach my $field (@$orderedFields) {
+    my $colSpec;
+    switch($field->{type}) {
+      case 'SQL_VARCHAR' { $colSpec= "CHAR( $field->{maxLength} )"; }
+	case 'SQL_DATE'    { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
+	case 'SQL_NUMBER'  { $colSpec =  "CHAR"; }  #use default here for numbers
+	else { die "unrecognized SQL type: " + $field->{type}}
+    }
+    push(@colSpecs, "$field->{name} $colSpec");
+  }
+
+  my $colSpecsStr = join(",\n", @colSpecs);
+  my $appendStr = $append? "APPEND" : "";
+  open(CTL, ">$ctlFileName") || die "Can't open '$ctlFileName' for writing";
+  print CTL <<"EOF";
+     LOAD DATA
+     INFILE $dataFileName
+     $appendStr
+     INTO TABLE $tableName
+     CHARACTERSET UTF8
+     LENGTH SEMANTICS CHAR
+     LINE DELIMINTER '\\n'
+     REENABLE DISABLED_CONSTRAINTS
+     FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '"'
+     TRAILING NULLCOLS
+    ($colSpecsStr
+    )
+EOF
+  close(CTL);
+}
