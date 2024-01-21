@@ -2,10 +2,9 @@
 use DBI;
 use DBI qw(:sql_types);
 use Time::HiRes qw ( time );
-use FindBin;
-use lib "$FindBin::Bin/../lib/perl";
 use JSON qw( decode_json );
 use File::Copy;
+use strict;
 
 my $SQLLDR_STREAM_SIZE = 512000;
 my $SQLLDR_ROWS = 5000;
@@ -18,7 +17,26 @@ my ($userDatasetId, $inputDir) = @ARGV;
 
 usage() unless scalar(@ARGV) == 2;
 
+sub usage {
+
+  my $envStr = '$' . join(", \$", @envVars);
+
+  die "
+Install an IsaSimple user dataset into the VDI dataset schema.
+
+Usage: install-data vdi_dataset_id files_dir
+
+Where:
+  vdi_dataset_id:  a vdi user dataset id
+  files_dir:       a directory containing an install.json manifest file, including details of table configurations, and *.cache tables holding tabular data.
+
+Env: $envStr
+
+";
+}
+
 for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
+
 my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}", $ENV{DB_USER}, $ENV{DB_PASS})
     || die "Couldn't connect to database: " . DBI->errstr;
 $dbh->{RaiseError} = 1;
@@ -30,7 +48,7 @@ my $installJsonFile = "$inputDir/install.json";
 
 die "No install.json file found." unless -e $installJsonFile;
 
-# parse json file of table/index/view configurations
+# parse json file containing table/index/view configurations
 open my $fh, '<', $installJsonFile or die "error opening $installJsonFile: $!";
 my $configsArray = do { local $/; <$fh> };
 
@@ -46,24 +64,23 @@ my $datasetDir = $ENV{DATA_FILES};
 die "Dataset target dir $datasetDir already exists\n" if -e $datasetDir;
 mkdir($datasetDir) || die "Failed creating dataset target dir $datasetDir\n";
 chmod(0775, $datasetDir) || die "Failed chmod of $datasetDir\n"; # rwxrwxr-x
+copy($installJsonFile, "$datasetDir/install.json");
 
-# loop through tables
-# if not preexisting, create table
-# use bulk loader to load rows
+# loop through tables.  if not preexisting, create table.  use bulk loader to load rows
 foreach my $config (@$configsArray) {
   next unless $config->{type} eq 'table';
-  unless ($config->{is_preexisting_table}) {
+  if ($config->{is_preexisting_table}) {
+    loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
+  } else {
     createTable($dbh, $ENV{DB_SCHEMA}, $config);
+    bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
   }
-  my $cacheFile = "$config->{name}.cache";
-  loadTable($ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $tableConfig);
 }
 
 # loop through indexes
 foreach my $config (@$configsArray) {
   next unless $config->{type} eq 'index';
-  my $tableName = "?";
-  createIndex($dbh, $ENV{DB_SCHEMA}, $tableName, $config, $indxTableSpace);
+  createIndex($dbh, $ENV{DB_SCHEMA}, $config, $indxTableSpace);
 }
 
 # loop through views
@@ -87,11 +104,56 @@ GRANT select ON VDI_DATASETS_&1..UD_GeneId TO gus_r;
 
 =cut
 
+# we don't use bulk loading for these tables because we insert very few rows, and they have macros
+sub loadTable {
+  my ($inputDir, $dbh, $schema, $platform, $tableConfig, $userDatasetId) = @_;
+
+  my @colNames;
+  my $fields = $tableConfig->{fields};
+  my $tableName = $tableConfig->{name};
+  foreach my $field (@$fields) {
+    push(@colNames, $field->{name});
+  }
+  my $colNamesStr = join(", ", @colNames);
+  my $file = "$inputDir/$tableName.cache";
+  open my $info, $file or die "Could not open $file: $!";
+
+  my @values;
+  while( my $line = <$info>)  {
+    my @v = split("/t", $line);
+    my @values;
+    my $count = 0;
+    foreach my $v (@v) {
+      push(@values, mapColValues($v, $userDatasetId, $schema, $platform, $fields->[$count]->{type}));
+      $count += 1;
+    }
+    my $valuesStr = join(", ", @values);
+    my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
+    $sql .= " FROM DUAL" if $platform eq "Oracle";
+    print STDERR "$sql\n";
+#    $dbh->execute($sql);
+  }
+#  $dbh->commit();
+  close $info;
+}
+
+# only used for preexisting tables
+sub mapColValues {
+  my ($valueFromFile, $userDatasetId, $schema, $platform, $colType) = @_;
+
+  if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
+  elsif ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_seq.nextval" : "nextval($schema.study_seq)"; }
+  elsif ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
+  elsif ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@')  { return $platform eq 'Oracle'? "$schema.entitytypegraph_seq.nextval" : "nextval($schema.entitytypegraph_seq)"; }
+  elsif ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE')  { return "'$valueFromFile'"; }
+  else { return $valueFromFile; }
+}
+
 sub createTable {
   my ($dbh, $schema, $tableConfig) = @_;
 
-  my $tableName = $schema.$table->{name};
-  my $cols = createColumns($table);
+  my $tableName = $schema.$tableConfig->{name};
+  my $cols = createColumns($tableConfig);
 
   my $create = "
 CREATE TABLE $tableName (
@@ -99,33 +161,58 @@ $cols
 )
 ";
   $dbh->execute($create);
+
   my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
   $dbh->execute($grantVdiW);
+
   my $grantGusR = "GRANT SELECT on $tableName to gus_r";
   $dbh->execute($grantGusR);
 }
 
-sub loadTable {
-  my ($platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
+sub createColumns {
+  my ($tableConfig) = @_;
+
+  my @colSpecs;
+  my $fields = $tableConfig->{fields};
+  foreach my $field (@$fields) {
+    my $colSpec;
+    if ($field->{type} eq 'SQL_VARCHAR') {
+      $colSpec= "VARCHAR" . $field->{maxLength} eq 'NA'? "" : "($field->{maxLength})";
+    } elsif ($field->{type} eq 'SQL_DATE') {
+      $colSpec = "DATE";
+    } elsif ($field->{type} eq 'SQL_NUMBER')  {
+      $colSpec= "NUMBER" . $field->{prec} eq 'NA'? "" : "($field->{prec})";
+    } else { die "unrecognized SQL type: " + $field->{type}}
+    $colSpec .= $field->{isNullable} eq 'YES'? "" : " NOT NULL";
+    push(@colSpecs, $colSpec);
+  }
+  return join(",\n", @colSpecs);
+}
+
+sub bulkLoadTable {
+  my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
 
   if ($platform eq 'Oracle') {
     my $controlFileName = $tableConfig->{name} . '.ctrl';
-    writeSqlloaderCtl($orderedFields, $tableName, $ctlFileName, $dataFileName, $append);
+    my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
     my $logFileName = $tableConfig->{name} . '.log';
     my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
+    writeSqlloaderCtl($tableConfig->{fields}, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
-    system($cmdLine) && die "Failed running $cmdLine $!";
+    print STDERR  $cmdLine;
+    #system($cmdLine) && die "Failed running $cmdLine $!";
    }
 }
 
 sub createIndex {
-  my ($dbh, $schema, $tableName, $indexConfig, $indxTableSpace) = @_;
+  my ($dbh, $schema, $indexConfig, $indxTableSpace) = @_;
 
   my $indexName = $schema.$indexConfig->{name};
   my @colArray = $indexConfig->{orderedColumns};
   my $cols = join(", ", @colArray);
-  my $createIndex = "CREATE INDEX $indexName on $tableName ($cols) $indxTableSpace";
-  $dbh->execute($createIndex);
+  my $createIndex = "CREATE INDEX $indexName on $indexConfig->{tableName} ($cols) $indxTableSpace";
+  print STDERR $createIndex;
+  #$dbh->execute($createIndex);
 }
 
 sub createView {
@@ -134,20 +221,8 @@ sub createView {
   my $viewName = $schema.$viewConfig->{name};
   my $def = $schema.$viewConfig->{definition};
   my $createView = "CREATE VIEW $viewName as $def";
-  $dbh->execute($createView);
-}
-
-sub bulkLoadOracle {
-  my @udIdArray;
-  my @geneIdArray;
-  my $batchExecutor = new DbiBatchExecutor(100, 1000);
-  while(<F>) {
-    chomp;
-    push(@udIdArray, $userDatasetId);
-    push(@geneIdArray, $_);
-    $batchExecutor->periodicallyExecuteBatch($dbh, $sth, 0, [SQL_VARCHAR, SQL_VARCHAR], \@udIdArray, \@geneIdArray);
-  }
-  $batchExecutor->periodicallyExecuteBatch($dbh, $sth, 1, [SQL_VARCHAR, SQL_VARCHAR], \@udIdArray, \@geneIdArray);
+  print STDERR $createView;
+  #$dbh->execute($createView);
 }
 
 sub getSqlLdrCmdLine {
@@ -155,7 +230,7 @@ sub getSqlLdrCmdLine {
 
   my $connectStr = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SID=$dbname)))";
 
-  my $cmd = "sqlldr $login/$password\@$connectStr control=$controlFileName errors=0 discardmax=0 log=$logFileName";
+  my $cmd = "sqlldr $login/$password\@$connectStr control=$controlFileName errors=0 discardmax=0 log=$logFileName ";
   $cmd .= $direct?
     "streamsize=512000 direct=TRUE" :
     "rows=5000 bindsize=2048000 readsize=1048576";
@@ -169,12 +244,11 @@ sub writeSqlloaderCtl {
   my @colSpecs;
   foreach my $field (@$orderedFields) {
     my $colSpec;
-    switch($field->{type}) {
-      case 'SQL_VARCHAR' { $colSpec= "CHAR( $field->{maxLength} )"; }
-	case 'SQL_DATE'    { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
-	case 'SQL_NUMBER'  { $colSpec =  "CHAR"; }  #use default here for numbers
-	else { die "unrecognized SQL type: " + $field->{type}}
-    }
+    if ($field->{type} eq 'SQL_VARCHAR') { $colSpec= "CHAR( $field->{maxLength} )"; }
+    elsif ($field->{type} eq 'SQL_DATE') { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
+    elsif ($field->{type} eq 'SQL_NUMBER')  { $colSpec =  "CHAR"; }  #use default here for numbers
+    else { die "unrecognized SQL type: " + $field->{type}}
+
     push(@colSpecs, "$field->{name} $colSpec");
   }
 
