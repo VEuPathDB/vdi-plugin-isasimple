@@ -1,6 +1,6 @@
 #!/usr/bin/perl
-use DBI;
-use DBI qw(:sql_types);
+#use DBI;
+#use DBI qw(:sql_types);
 use Time::HiRes qw ( time );
 use JSON qw( decode_json );
 use File::Copy;
@@ -37,8 +37,9 @@ Env: $envStr
 
 for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
 
-my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}", $ENV{DB_USER}, $ENV{DB_PASS})
-    || die "Couldn't connect to database: " . DBI->errstr;
+#my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}", $ENV{DB_USER}, $ENV{DB_PASS})
+#    || die "Couldn't connect to database: " . DBI->errstr;
+my $dbh;
 $dbh->{RaiseError} = 1;
 $dbh->{AutoCommit} = 0;
 
@@ -50,17 +51,18 @@ die "No install.json file found." unless -e $installJsonFile;
 
 # parse json file containing table/index/view configurations
 open my $fh, '<', $installJsonFile or die "error opening $installJsonFile: $!";
-my $configsArray = do { local $/; <$fh> };
+my $jsonString = do { local $/; <$fh> };
+my $configsArray = decode_json($jsonString);
 
 # validate that we have all needed files
 foreach my $config (@$configsArray) {
   next unless $config->{type} eq 'table';
-  my $cacheFile = "$config->{name}.cache";
+  my $cacheFile = "$inputDir/$config->{name}.cache";
   die "Can't find $cacheFile" unless -e "$cacheFile";
 }
 
 # write json file to data files dir (do this first, because it's needed to control an uninstall)
-my $datasetDir = $ENV{DATA_FILES};
+my $datasetDir = "$ENV{DATA_FILES}/$userDatasetId";
 die "Dataset target dir $datasetDir already exists\n" if -e $datasetDir;
 mkdir($datasetDir) || die "Failed creating dataset target dir $datasetDir\n";
 chmod(0775, $datasetDir) || die "Failed chmod of $datasetDir\n"; # rwxrwxr-x
@@ -120,7 +122,8 @@ sub loadTable {
 
   my @values;
   while( my $line = <$info>)  {
-    my @v = split("/t", $line);
+    chomp $line;
+    my @v = split(/\t/, $line);
     my @values;
     my $count = 0;
     foreach my $v (@v) {
@@ -130,7 +133,7 @@ sub loadTable {
     my $valuesStr = join(", ", @values);
     my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
     $sql .= " FROM DUAL" if $platform eq "Oracle";
-    print STDERR "$sql\n";
+    print STDERR "$sql\n\n";
 #    $dbh->execute($sql);
   }
 #  $dbh->commit();
@@ -160,13 +163,13 @@ CREATE TABLE $tableName (
 $cols
 )
 ";
-  $dbh->execute($create);
+ # $dbh->execute($create);
 
   my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
-  $dbh->execute($grantVdiW);
+ # $dbh->execute($grantVdiW);
 
   my $grantGusR = "GRANT SELECT on $tableName to gus_r";
-  $dbh->execute($grantGusR);
+ # $dbh->execute($grantGusR);
 }
 
 sub createColumns {
@@ -197,9 +200,9 @@ sub bulkLoadTable {
     my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
     my $logFileName = $tableConfig->{name} . '.log';
     my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
-    writeSqlloaderCtl($tableConfig->{fields}, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
+    writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
-    print STDERR  $cmdLine;
+    print STDERR  "$cmdLine\n\n";
     #system($cmdLine) && die "Failed running $cmdLine $!";
    }
 }
@@ -207,21 +210,22 @@ sub bulkLoadTable {
 sub createIndex {
   my ($dbh, $schema, $indexConfig, $indxTableSpace) = @_;
 
-  my $indexName = $schema.$indexConfig->{name};
-  my @colArray = $indexConfig->{orderedColumns};
-  my $cols = join(", ", @colArray);
-  my $createIndex = "CREATE INDEX $indexName on $indexConfig->{tableName} ($cols) $indxTableSpace";
-  print STDERR $createIndex;
+  my $indexName = "$schema.$indexConfig->{name}";
+  my $colArray = $indexConfig->{orderedColumns};
+  my $cols = join(", ", @$colArray);
+  my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";
+  print STDERR "$createIndex\n\n";
   #$dbh->execute($createIndex);
 }
 
 sub createView {
   my ($dbh, $schema, $viewConfig) = @_;
 
-  my $viewName = $schema.$viewConfig->{name};
-  my $def = $schema.$viewConfig->{definition};
+  my $viewName = "$schema.$viewConfig->{name}";
+  my $def = $viewConfig->{definition};
+  $def =~ s/\@SCHEMA\@/$schema/g;
   my $createView = "CREATE VIEW $viewName as $def";
-  print STDERR $createView;
+  print STDERR "$createView\n\n";
   #$dbh->execute($createView);
 }
 
@@ -239,7 +243,7 @@ sub getSqlLdrCmdLine {
 }
 
 sub writeSqlloaderCtl {
-  my ($orderedFields, $tableName, $ctlFileName, $dataFileName, $append) = @_;
+  my ($orderedFields, $schema, $tableName, $ctlFileName, $dataFileName, $append) = @_;
 
   my @colSpecs;
   foreach my $field (@$orderedFields) {
@@ -259,7 +263,7 @@ sub writeSqlloaderCtl {
      LOAD DATA
      INFILE $dataFileName
      $appendStr
-     INTO TABLE $tableName
+     INTO TABLE $schema.$tableName
      CHARACTERSET UTF8
      LENGTH SEMANTICS CHAR
      LINE DELIMINTER '\\n'
