@@ -47,7 +47,7 @@ unless ($DRYRUN) {
     || die "Couldn't connect to database: " . DBI->errstr;
 }
 $dbh->{RaiseError} = 1;
-$dbh->{AutoCommit} = 0;
+$dbh->{AutoCommit} = 1;
 
 my $indxTableSpace = $ENV{DB_PLATFORM} eq 'Oracle'? " tablespace indx" : "";
 
@@ -96,6 +96,10 @@ foreach my $config (@$configsArray) {
   next unless $config->{type} eq 'view';
   createView($dbh, $ENV{DB_SCHEMA}, $config);
 }
+
+##################################################################################################
+# subroutines
+#################################################################################################
 
 # we don't use bulk loading for these tables because we insert very few rows, and they have macros
 sub loadTable {
@@ -266,7 +270,7 @@ sub writeSqlloaderCtl {
      $appendStr
      INTO TABLE $schema.$tableName
      REENABLE DISABLED_CONSTRAINTS
-     FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '"'
+     FIELDS TERMINATED BY '\\t'
      TRAILING NULLCOLS
     ($colSpecsStr
     )
