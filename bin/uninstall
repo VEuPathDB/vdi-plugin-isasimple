@@ -5,9 +5,9 @@ use strict;
 
 my @envVars = ('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_PLATFORM', 'DB_USER', 'DB_PASS', 'DB_SCHEMA', 'DATA_FILES');
 
-my ($userDatasetId, $inputDir) = @ARGV;
+my ($userDatasetId) = @ARGV;
 
-usage() unless scalar(@ARGV) == 2;
+usage() unless scalar(@ARGV) == 1;
 
 sub usage {
 
@@ -40,11 +40,12 @@ my $installJsonFile = "$datasetDir/install.json";
 
 # check if already uninstalled
 if (!(-e $installJsonFile)) {
-my $sql = "select count(*) from $schema.study where user_dataset_id = '$userDatasetId'";
+  my $sql = "select count(*) from $schema.study where user_dataset_id = '$userDatasetId'";
   my $sth = $dbh->prepare($sql);
   $sth->execute();
   my ($studyRowPresent) = $sth->fetchrow_array;  # uh oh... no install.json but not removed fully from db
   die "Missing file $datasetDir/install.json.  Cannot uninstall\n" if ($studyRowPresent);
+  print STDERR "Dataset not present.  Nothing to uninstall\n";
   exit 0;
 }
 
@@ -56,13 +57,13 @@ my $configsArray = decode_json($jsonString);
 # drop views
 foreach my $config (@$configsArray) {
   next if $config->{type} ne 'view';
-  dropTableOrView($dbh, 'view', $config->{name});
+  dropTableOrView($dbh, 'view', "$schema.$config->{name}");
 }
 
 # drop tables
 foreach my $config (@$configsArray) {
   next if $config->{type} ne 'table' || $config->{is_preexisting_table} ;
-  dropTableOrView($dbh, 'table', $config->{name});
+  dropTableOrView($dbh, 'table', "$schema.$config->{name}");
 }
 
 # delete rows from shared tables
@@ -71,9 +72,11 @@ delete from $schema.entitytypegraph
 where study_stable_id in (
  select stable_id from $schema.study where user_dataset_id = '$userDatasetId'
 )";
+print STDERR "RUNNING SQL: $sql\n\n";
 $dbh->do($sql) || die "Failed running sql: $sql\n";
 
 $sql = "delete from $schema.study where user_dataset_id = '$userDatasetId'";
+print STDERR "RUNNING SQL: $sql\n\n";
 $dbh->do($sql) || die "Failed running sql: $sql\n";
 
 # finally, remove UD data dir.  leave this for last, to retain install.json if there are any errors
@@ -87,12 +90,16 @@ sub dropTableOrView {
 
   if ($ENV{DB_PLATFORM} eq 'Oracle') {
     $dbh->{RaiseError} = 0; $dbh->{PrintError} = 0;
-    my $status = $dbh->do("drop $tableOrView $thing");
+    my $sql = "drop $tableOrView $thing";
+    print STDERR "RUNNING SQL: $sql\n\n";
+    my $status = $dbh->do($sql);
     # ignore error that table or view does not exist (ORA-00942) 
     die "Error trying to drop $tableOrView $thing " . $DBI::errstr unless ($status || $DBI::errstr =~ /ORA-00942/);
     $dbh->{RaiseError} = 1; $dbh->{PrintError} = 1;
   } else {
-    $dbh->do("drop $tableOrView if exists $thing");  # pg offers the sensible thing
+    my $sql = "drop $tableOrView if exists $thing";  # pg offers the sensible thing
+    print STDERR "RUNNING SQL: $sql\n\n";
+    $dbh->do($sql);
   }
 }
 
