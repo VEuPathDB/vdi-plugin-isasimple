@@ -1,6 +1,6 @@
 #!/usr/bin/perl
-#use DBI;
-#use DBI qw(:sql_types);
+use DBI;
+use DBI qw(:sql_types);
 use Time::HiRes qw ( time );
 use JSON qw( decode_json );
 use File::Copy;
@@ -10,6 +10,8 @@ my $SQLLDR_STREAM_SIZE = 512000;
 my $SQLLDR_ROWS = 5000;
 my $SQLLDR_BINDSIZE = 2048000;
 my $SQLLDR_READSIZE = 1048576;
+
+my $DRYRUN = 0;
 
 my @envVars = ('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_PLATFORM', 'DB_USER', 'DB_PASS', 'DB_SCHEMA', 'DATA_FILES');
 
@@ -37,11 +39,15 @@ Env: $envStr
 
 for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
 
-#my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}", $ENV{DB_USER}, $ENV{DB_PASS})
-#    || die "Couldn't connect to database: " . DBI->errstr;
 my $dbh;
+unless ($DRYRUN) {
+  my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
+  print STDERR "connect string: $connectString\n";
+  $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS})
+    || die "Couldn't connect to database: " . DBI->errstr;
+}
 $dbh->{RaiseError} = 1;
-$dbh->{AutoCommit} = 0;
+$dbh->{AutoCommit} = 1;
 
 my $indxTableSpace = $ENV{DB_PLATFORM} eq 'Oracle'? " tablespace indx" : "";
 
@@ -91,20 +97,9 @@ foreach my $config (@$configsArray) {
   createView($dbh, $ENV{DB_SCHEMA}, $config);
 }
 
-=pod
-
-create table VDI_DATASETS_&1..UD_GeneId (
-USER_DATASET_ID          VARCHAR2(32),
-gene_SOURCE_ID                             VARCHAR2(100),
-FOREIGN KEY (user_dataset_id) REFERENCES VDI_CONTROL_&1..dataset(dataset_id)
-);
-
-CREATE unique INDEX VDI_DATASETS_&1..UD_GENEID_idx1 ON VDI_DATASETS_&1..UD_geneid (user_dataset_id, gene_source_id) tablespace indx;
-
-GRANT insert, select, update, delete ON VDI_DATASETS_&1..UD_GeneId TO vdi_w;
-GRANT select ON VDI_DATASETS_&1..UD_GeneId TO gus_r;
-
-=cut
+##################################################################################################
+# subroutines
+#################################################################################################
 
 # we don't use bulk loading for these tables because we insert very few rows, and they have macros
 sub loadTable {
@@ -113,6 +108,7 @@ sub loadTable {
   my @colNames;
   my $fields = $tableConfig->{fields};
   my $tableName = $tableConfig->{name};
+  print STDERR "Loading table $tableName\n";
   foreach my $field (@$fields) {
     push(@colNames, $field->{name});
   }
@@ -134,9 +130,9 @@ sub loadTable {
     my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
     $sql .= " FROM DUAL" if $platform eq "Oracle";
     print STDERR "$sql\n\n";
-#    $dbh->execute($sql);
+    $dbh->do($sql) unless $DRYRUN;
   }
-#  $dbh->commit();
+  $dbh->commit() unless $DRYRUN;
   close $info;
 }
 
@@ -145,9 +141,9 @@ sub mapColValues {
   my ($valueFromFile, $userDatasetId, $schema, $platform, $colType) = @_;
 
   if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
-  elsif ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_seq.nextval" : "nextval($schema.study_seq)"; }
+  elsif ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
   elsif ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
-  elsif ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@')  { return $platform eq 'Oracle'? "$schema.entitytypegraph_seq.nextval" : "nextval($schema.entitytypegraph_seq)"; }
+  elsif ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@')  { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
   elsif ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE')  { return "'$valueFromFile'"; }
   else { return $valueFromFile; }
 }
@@ -155,7 +151,8 @@ sub mapColValues {
 sub createTable {
   my ($dbh, $schema, $tableConfig) = @_;
 
-  my $tableName = $schema.$tableConfig->{name};
+  my $tableName = "$schema.$tableConfig->{name}";
+  print STDERR "Creating table $tableName\n";
   my $cols = createColumns($tableConfig);
 
   my $create = "
@@ -163,13 +160,16 @@ CREATE TABLE $tableName (
 $cols
 )
 ";
- # $dbh->execute($create);
+  print STDERR "$create\n";
+  $dbh->do($create) unless $DRYRUN;
 
   my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
- # $dbh->execute($grantVdiW);
+  print STDERR "$grantVdiW\n";
+  $dbh->do($grantVdiW) unless $DRYRUN;
 
   my $grantGusR = "GRANT SELECT on $tableName to gus_r";
- # $dbh->execute($grantGusR);
+  print STDERR "$grantGusR\n";
+  $dbh->do($grantGusR) unless $DRYRUN;
 }
 
 sub createColumns {
@@ -178,13 +178,13 @@ sub createColumns {
   my @colSpecs;
   my $fields = $tableConfig->{fields};
   foreach my $field (@$fields) {
-    my $colSpec;
+    my $colSpec = $field->{name};
     if ($field->{type} eq 'SQL_VARCHAR') {
-      $colSpec= "VARCHAR" . $field->{maxLength} eq 'NA'? "" : "($field->{maxLength})";
+      $colSpec .= " VARCHAR" . ($field->{maxLength} eq 'NA'? "" : "($field->{maxLength})");
     } elsif ($field->{type} eq 'SQL_DATE') {
-      $colSpec = "DATE";
+      $colSpec .= " DATE";
     } elsif ($field->{type} eq 'SQL_NUMBER')  {
-      $colSpec= "NUMBER" . $field->{prec} eq 'NA'? "" : "($field->{prec})";
+      $colSpec .= " NUMBER" . ($field->{prec} eq 'NA'? "" : "($field->{prec})");
     } else { die "unrecognized SQL type: " + $field->{type}}
     $colSpec .= $field->{isNullable} eq 'YES'? "" : " NOT NULL";
     push(@colSpecs, $colSpec);
@@ -195,6 +195,7 @@ sub createColumns {
 sub bulkLoadTable {
   my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
 
+  print STDERR "Bulk loading table $tableConfig->{name}\n";
   if ($platform eq 'Oracle') {
     my $controlFileName = $tableConfig->{name} . '.ctrl';
     my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
@@ -203,7 +204,7 @@ sub bulkLoadTable {
     writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
     print STDERR  "$cmdLine\n\n";
-    #system($cmdLine) && die "Failed running $cmdLine $!";
+    unless ($DRYRUN) { system($cmdLine) && die "Failed running $cmdLine $!\n"; }
    }
 }
 
@@ -215,7 +216,7 @@ sub createIndex {
   my $cols = join(", ", @$colArray);
   my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";
   print STDERR "$createIndex\n\n";
-  #$dbh->execute($createIndex);
+  $dbh->do($createIndex) unless $DRYRUN;
 }
 
 sub createView {
@@ -226,15 +227,17 @@ sub createView {
   $def =~ s/\@SCHEMA\@/$schema/g;
   my $createView = "CREATE VIEW $viewName as $def";
   print STDERR "$createView\n\n";
-  #$dbh->execute($createView);
+  $dbh->do($createView) unless $DRYRUN;
 }
+
+# sqlldr userid=dbuser@\"\(description=\(address=\(host=remote.db.com\)\(protocol=tcp\)\(port=1521\)\)\(connect_data=\(sid=dbsid\)\)\)\"/dbpass control=controlfilename.ctl data=data.csv
 
 sub getSqlLdrCmdLine {
   my ($login, $password, $host, $port, $dbname, $controlFileName, $logFileName, $direct) = @_;
 
-  my $connectStr = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SID=$dbname)))";
+  my $connectStr = "\"(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SERVICE_NAME=$dbname)))\"";
 
-  my $cmd = "sqlldr $login/$password\@$connectStr control=$controlFileName errors=0 discardmax=0 log=$logFileName ";
+  my $cmd = "sqlldr '$login/$password\@$connectStr' control=$controlFileName errors=0 discardmax=0 log=$logFileName ";
   $cmd .= $direct?
     "streamsize=512000 direct=TRUE" :
     "rows=5000 bindsize=2048000 readsize=1048576";
@@ -261,14 +264,13 @@ sub writeSqlloaderCtl {
   open(CTL, ">$ctlFileName") || die "Can't open '$ctlFileName' for writing";
   print CTL <<"EOF";
      LOAD DATA
-     INFILE $dataFileName
-     $appendStr
-     INTO TABLE $schema.$tableName
      CHARACTERSET UTF8
      LENGTH SEMANTICS CHAR
-     LINE DELIMINTER '\\n'
+     INFILE '$dataFileName'
+     $appendStr
+     INTO TABLE $schema.$tableName
      REENABLE DISABLED_CONSTRAINTS
-     FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '"'
+     FIELDS TERMINATED BY '\\t'
      TRAILING NULLCOLS
     ($colSpecsStr
     )
