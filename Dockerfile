@@ -1,3 +1,4 @@
+# FIXME: Update this with appropriate tag after https://github.com/VEuPathDB/docker-gus-apidb-base/pull/1 is incorporated
 FROM veupathdb/vdi-plugin-base:2.0.4
 
 
@@ -6,7 +7,7 @@ COPY lib/xml/* /usr/local/lib/xml/
 
 workdir ${PROJECT_HOME}
 
-ARG APICOMMONDATA_COMMIT_HASH=0e3511d1e0734ab567b0e4efd8c7998749b04a5d \
+ARG APICOMMONDATA_COMMIT_HASH=cf55ae622bd2e21016c7c4cbdbf9e26da629d602 \
     CLINEPIDATA_GIT_COMMIT_SHA=0c2758f64b67cb8504b30616b37d79a649e18d48 \
     EDA_NEXTFLOW_GIT_COMMIT_SHA=32fee3254b229b00ee3ee5a0007e81e977f8042d
 
