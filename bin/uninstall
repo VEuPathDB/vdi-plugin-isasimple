@@ -80,8 +80,12 @@ print STDERR "RUNNING SQL: $sql\n\n";
 $dbh->do($sql) || die "Failed running sql: $sql\n";
 
 # finally, remove UD data dir.  leave this for last, to retain install.json if there are any errors
-unlink("$datasetDir/install.json") || die "Can't remove file '$datasetDir/install.json'\n";
-rmdir($datasetDir) || die "Can't remove UD dir '$datasetDir'\n";
+if (-e "$datasetDir/install.json") {
+  unlink("$datasetDir/install.json") || die "Can't remove file '$datasetDir/install.json'\n";
+}
+if (-e $datasetDir) {
+  rmdir($datasetDir) || die "Can't remove UD dir '$datasetDir'\n";
+}
 
 #################################################################################################
 

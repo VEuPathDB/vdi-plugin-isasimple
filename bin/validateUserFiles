@@ -111,7 +111,7 @@ foreach my $filename (@files) {
       foreach my $col (@$headers){
         my $len = length( shift(@$row) );
         $maxlen{$col} ||= $len;
-        if($len > $MAXLENGTH){ 
+        if($len > $MAXLENGTH){
           $maxlen{$col} = $len;
         }
       }

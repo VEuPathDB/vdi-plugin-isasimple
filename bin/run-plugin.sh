@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -e
 
@@ -25,13 +25,10 @@ EOSU
 # make sure the server is ready for connections
 timeout 90s bash -c "until pg_isready -U postgres; do sleep 5 ; done;"
 
-
-# Wait indefinitely;
-while true
-do
-#    su postgres -c '/usr/lib/postgresql/15/bin/pg_ctl status'
-    sleep 5
-done
+# FIXME!!!!
+#
+# Replace the while loop below with this java call to enable the plugin service
+java -jar -XX:+CrashOnOutOfMemoryError $JVM_MEM_ARGS $JVM_ARGS /service.jar || stopInstanceAndExit
 
 # Cleanup and stop the PostgreSQL server
 stopInstanceAndExit

@@ -68,10 +68,7 @@ foreach my $config (@$configsArray) {
 }
 
 # write json file to data files dir (do this first, because it's needed to control an uninstall)
-my $datasetDir = "$ENV{DATA_FILES}/$userDatasetId";
-die "Dataset target dir $datasetDir already exists\n" if -e $datasetDir;
-mkdir($datasetDir) || die "Failed creating dataset target dir $datasetDir\n";
-chmod(0775, $datasetDir) || die "Failed chmod of $datasetDir\n"; # rwxrwxr-x
+my $datasetDir = "$ENV{DATA_FILES}";
 copy($installJsonFile, "$datasetDir/install.json");
 
 # loop through tables.  if not preexisting, create table.  use bulk loader to load rows
@@ -117,9 +114,11 @@ sub loadTable {
   open my $info, $file or die "Could not open $file: $!";
 
   my @values;
-  while( my $line = <$info>)  {
-    chomp $line;
-    my @v = split(/\t/, $line);
+  while( my $line = <$info>) {
+    # Strip any trailing newlines
+    $line =~ s/\n+$//;
+    # Use -1 as the last arg to preserve trailing empty columns
+    my @v = split(/\t/, $line, -1);
     my @values;
     my $count = 0;
     foreach my $v (@v) {
@@ -141,11 +140,12 @@ sub mapColValues {
   my ($valueFromFile, $userDatasetId, $schema, $platform, $colType) = @_;
 
   if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
-  elsif ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
-  elsif ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
-  elsif ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@')  { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
-  elsif ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE')  { return "'$valueFromFile'"; }
-  else { return $valueFromFile; }
+  if ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
+  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
+  if ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@') { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
+  if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE') and $valueFromFile eq "")  { return "NULL"; }
+  if ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE') { return "'$valueFromFile'"; }
+  return $valueFromFile;
 }
 
 sub createTable {
@@ -197,13 +197,12 @@ sub bulkLoadTable {
 
   print STDERR "Bulk loading table $tableConfig->{name}\n";
   if ($platform eq 'Oracle') {
-    my $controlFileName = $tableConfig->{name} . '.ctrl';
+    my $controlFileName = $tableConfig->{name} . '.ctl';
     my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
     my $logFileName = $tableConfig->{name} . '.log';
     my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
     writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
-    print STDERR  "$cmdLine\n\n";
     unless ($DRYRUN) { system($cmdLine) && die "Failed running $cmdLine $!\n"; }
    }
 }
