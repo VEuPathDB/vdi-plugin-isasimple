@@ -33,7 +33,7 @@ my $dbh = DBI->connect("dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV
 $dbh->{RaiseError} = 1;
 $dbh->{AutoCommit} = 1;
 
-my $datasetDir = "$ENV{DATA_FILES}/$userDatasetId";
+my $datasetDir = "$ENV{DATA_FILES}";
 my $schema = $ENV{DB_SCHEMA};
 
 my $installJsonFile = "$datasetDir/install.json";
@@ -68,7 +68,7 @@ foreach my $config (@$configsArray) {
 
 # delete rows from shared tables
 my $sql = "
-delete from $schema.entitytypegraph 
+delete from $schema.entitytypegraph
 where study_stable_id in (
  select stable_id from $schema.study where user_dataset_id = '$userDatasetId'
 )";
