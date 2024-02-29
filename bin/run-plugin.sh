@@ -28,10 +28,7 @@ timeout 90s bash -c "until pg_isready -U postgres; do sleep 5 ; done;"
 # FIXME!!!!
 #
 # Replace the while loop below with this java call to enable the plugin service
-# java -jar -XX:+CrashOnOutOfMemoryError $JVM_MEM_ARGS $JVM_ARGS /service.jar || stopInstanceAndExit
-while true; do
-  sleep 5
-done
+java -jar -XX:+CrashOnOutOfMemoryError $JVM_MEM_ARGS $JVM_ARGS /service.jar || stopInstanceAndExit
 
 # Cleanup and stop the PostgreSQL server
 stopInstanceAndExit
