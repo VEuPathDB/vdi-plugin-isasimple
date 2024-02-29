@@ -9,6 +9,21 @@ WORKING_DIR=$PWD
 
 cp $INPUT_DIR/* $WORKING_DIR/
 
+
+dropDatabase() {
+  echo "Dropping Database ${DB_NAME}"
+  dropdb -f -U postgres ${DB_NAME}
+}
+
+dropDatabaseAndExit() {
+  dropDatabase
+  exit 1;
+}
+
+# Trap any ERR signal and run the stopInstance function
+trap 'dropDatabaseAndExit' ERR
+
+
 function confReplace() {
   sed -i "s#$1.*#$2#" $GUS_CONFIG
 }
@@ -43,5 +58,4 @@ nextflow -C ${WORKING_DIR}/nextflow.config \
   -ansi-log false \
   -entry loadUserDataset
 
-echo "Dropping Database ${DB_NAME}"
-dropdb -f -U postgres ${DB_NAME}
+dropDatabase
