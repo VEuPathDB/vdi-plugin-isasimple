@@ -23,5 +23,4 @@ bld ClinEpiData/Load
 cd $PROJECT_HOME
 git clone https://github.com/VEuPathDB/eda-nextflow.git
 cd eda-nextflow
-git checkout postgres
 git reset --hard $EDA_NEXTFLOW_GIT_COMMIT_SHA

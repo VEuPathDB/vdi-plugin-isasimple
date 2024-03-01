@@ -1,8 +1,8 @@
 FROM veupathdb/vdi-plugin-base:5.2.2
 
-ARG APICOMMONDATA_COMMIT_HASH=cf55ae622bd2e21016c7c4cbdbf9e26da629d602 \
+ARG APICOMMONDATA_COMMIT_HASH=52188ab1d9d395150a37addb9f911f2672b65cf9 \
     CLINEPIDATA_GIT_COMMIT_SHA=0c2758f64b67cb8504b30616b37d79a649e18d48 \
-    EDA_NEXTFLOW_GIT_COMMIT_SHA=32fee3254b229b00ee3ee5a0007e81e977f8042d \
+    EDA_NEXTFLOW_GIT_COMMIT_SHA=91127af88eaa2ef37af54a6b0ef56a7c9a208b98 \
     SHARED_LIB_GIT_COMMIT_SHA=ee4853748fcdd5d7d8675eb0eb3828ea11da8f42
 
 # This PATH entry should be moved to docker-gus-apidb-base
@@ -11,6 +11,7 @@ ENV PATH=${PROJECT_HOME}/install/bin:$PATH
 RUN perl -MCPAN -e 'install qq(Switch)' \
     && perl -MCPAN -e 'install qq(Config::Std)' \
     && perl -MCPAN -e 'install qq(Text::Unidecode)' \
+    && perl -MCPAN -e 'install qq(Date::Calc)' \
     && perl -MCPAN -e 'install qq(XML::Simple)'
 
 COPY bin/buildGus.bash /usr/bin/buildGus.bash
