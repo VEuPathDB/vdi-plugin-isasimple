@@ -1,4 +1,4 @@
-FROM veupathdb/vdi-plugin-base:5.2.3
+FROM veupathdb/vdi-plugin-base:5.2.4
 
 ARG APICOMMONDATA_COMMIT_HASH=068b3cbfc86e26887f0afcc7b6dd755a30066618 \
     CLINEPIDATA_GIT_COMMIT_SHA=0c2758f64b67cb8504b30616b37d79a649e18d48 \
