@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 
 set -e
+trap 'catchExit $?' EXIT
 
 INPUT_DIR=$1
 RESULTS_DIR=$2
@@ -9,20 +10,33 @@ WORKING_DIR=$PWD
 
 cp $INPUT_DIR/* $WORKING_DIR/
 
+function log() {
+  echo "$@" >&2
+}
 
-dropDatabase() {
-  echo "Dropping Database ${DB_NAME}"
+function cleanup() {
+  log "Dropping Database ${DB_NAME}"
   dropdb -f -U postgres ${DB_NAME}
 }
 
-dropDatabaseAndExit() {
-  dropDatabase
-  exit 1;
+function catchExit() {
+  case "$1" in
+    "0")
+      # Success!
+      ;;
+    "99")
+      log "exiting due to import validation failure"
+      ;;
+    *)
+      log "exiting due to unexpected error"
+      if [ -f ".nextflow.log" ]; then
+        cat ".nextflow.log" >&2
+      fi
+      ;;
+  esac
+
+  cleanup
 }
-
-# Trap any ERR signal and run the stopInstance function
-trap 'dropDatabaseAndExit' ERR
-
 
 function confReplace() {
   sed -i "s#$1.*#$2#" $GUS_CONFIG
@@ -32,19 +46,17 @@ DB_NAME=`date +%Y%M%d%H%m%S`
 GUS_CONFIG=$WORKING_DIR/gus.config
 GEO_MAPPINGS=/usr/local/lib/xml/geoMappings.xml
 
-
-
-echo "WORKING Directory = ${WORKING_DIR}"
+log "WORKING Directory = ${WORKING_DIR}"
 
 validateUserFiles $INPUT_DIR
 
 cp $GUS_HOME/config/gus.config $GUS_CONFIG
 confReplace "${TEMPLATE_DB_NAME}" "$DB_NAME"
 
-echo "MAKING database ${DB_NAME}"
+log "MAKING database ${DB_NAME}"
 createdb -T $TEMPLATE_DB_NAME -U postgres $DB_NAME
 
-echo "Write Config ..."
+log "Write Config ..."
 writeNextflowConfig --workdir ${WORKING_DIR} \
   --gusConfigFile $GUS_CONFIG \
   --name $DB_NAME \
@@ -52,10 +64,8 @@ writeNextflowConfig --workdir ${WORKING_DIR} \
   --resultsDir ${RESULTS_DIR} \
   >${WORKING_DIR}/nextflow.config
 
-echo "Begin Loading ..."
+log "Begin Loading ..."
 nextflow -C ${WORKING_DIR}/nextflow.config \
   run $PROJECT_HOME/eda-nextflow/main.nf \
   -ansi-log false \
   -entry loadUserDataset
-
-dropDatabase
