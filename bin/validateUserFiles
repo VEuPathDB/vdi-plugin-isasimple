@@ -9,18 +9,17 @@ use File::Copy;
 
 my $MAXCOLS = 999;
 my $MAXLENGTH = 1000;
-my $VALIDATION_ERR_CODE = 1;
+my $VALIDATION_ERR_CODE = 99;
 
 my @validExtensions = ('.txt', '.tsv', '.csv');
 
 sub usage {
     die "
-Usage: import input_dir output_dir
+Usage: validateUserFiles input_dir
 
-Prepare and validate an ISA Simple dataset for import.
+Validate an ISA Simple dataset for import.
 
 input_dir: must contain the original dataset files, and no other files.
-output_dir: will contain the import-ready set of files.  In this case, the same as input.
 
 If there is a validation error, exit with status $VALIDATION_ERR_CODE.  STDOUT will contain the user-appropriate validation error message
 
@@ -34,14 +33,10 @@ Validator tests for:
 ";
 }
 
-usage() unless scalar(@ARGV) == 2;
+usage() unless scalar(@ARGV) == 1;
 
-my ($inputDir, $outputDir) = @ARGV;
+my ($inputDir, $dh) = @ARGV;
 
-opendir(my $dh, $outputDir) or die "can't open dir '$outputDir'\n";;
-my $numOutputFiles = () = readdir($dh);
-die "Output dir '$outputDir' must be empty\n" if $numOutputFiles != 2; # . and .. are always present
-close($dh);
 
 opendir($dh, $inputDir) or die "can't open dir '$inputDir'\n";;
 my @files = readdir($dh);
@@ -116,7 +111,7 @@ foreach my $filename (@files) {
       foreach my $col (@$headers){
         my $len = length( shift(@$row) );
         $maxlen{$col} ||= $len;
-        if($len > $MAXLENGTH){ 
+        if($len > $MAXLENGTH){
           $maxlen{$col} = $len;
         }
       }
@@ -134,9 +129,6 @@ foreach my $filename (@files) {
       }
     }
   }
-
-  copy($filepath, "$outputDir/$filename");
-
 }
 
 my $invalidCount = 0;

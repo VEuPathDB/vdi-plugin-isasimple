@@ -1,86 +1,278 @@
-#!/usr/bin/env bash
+#!/usr/bin/perl
+use DBI;
+use DBI qw(:sql_types);
+use Time::HiRes qw ( time );
+use JSON qw( decode_json );
+use File::Copy;
+use strict;
 
-# exit when any command fails
-set -e
+my $SQLLDR_STREAM_SIZE = 512000;
+my $SQLLDR_ROWS = 5000;
+my $SQLLDR_BINDSIZE = 2048000;
+my $SQLLDR_READSIZE = 1048576;
 
-userDatasetId=$1
-inputDir=$2;
+my $DRYRUN = 0;
 
-if [ -z $inputDir ] || [ -z $userDatasetId ]; then
-    echo "Usage: install-data user_dataset_id inputDir"
-    exit 255
-fi
+my @envVars = ('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_PLATFORM', 'DB_USER', 'DB_PASS', 'DB_SCHEMA', 'DATA_FILES');
 
-makeGusConfigFile temp_gus.config
+my ($userDatasetId, $inputDir) = @ARGV;
 
-export NLS_LANG='AMERICAN_AMERICA.UTF8';
+usage() unless scalar(@ARGV) == 2;
 
-exportInvestigation.pl -a -m $inputDir -t $userDatasetId
+sub usage {
 
-study=$userDatasetId # just needs to be unique
+  my $envStr = '$' . join(", \$", @envVars);
 
-ontologyTermsToTabDelim.pl ${study}/ontologyMapping.xml ${study}
+  die "
+Install an IsaSimple user dataset into the VDI dataset schema.
 
-ga GUS::Supported::Plugin::InsertExternalDatabase --name $study --commit --gusconfigfile temp_gus.config --gus;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName $study --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
+Usage: install-data vdi_dataset_id files_dir
 
-ga GUS::Supported::Plugin::InsertExternalDatabase --name "${study}_terms" --commit --gusconfigfile temp_gus.config;
-ga GUS::Supported::Plugin::InsertExternalDatabaseRls --databaseName "${study}_terms" --databaseVersion dontcare --commit --gusconfigfile temp_gus.config;
+Where:
+  vdi_dataset_id:  a vdi user dataset id
+  files_dir:       a directory containing an install.json manifest file, including details of table configurations, and *.cache tables holding tabular data.
 
-ga GUS::Supported::Plugin::InsertOntologyFromTabDelim \
-    --termFile $study/ontology_terms.txt \
-    --relFile $study/ontology_relationships.txt \
-    --relTypeExtDbRlsSpec "Ontology_Relationship_Types_RSRC|1.3" \
-    --extDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
+Env: $envStr
 
-#touch $PWD/$study/valueMapping.txt
-#touch $PWD/$study/termOverride.xml
+";
+}
 
-ga ApiCommonData::Load::Plugin::InsertEntityGraph \
-    --metaDataRoot $PWD \
-    --investigationSubset $study \
-    --investigationBaseName investigation.xml \
-    --isSimpleConfiguration \
-    --ontologyMappingFile $PWD/$study/ontologyMapping.xml \
-    --extDbRlsSpec "${study}|dontcare" \
-    --dateObfuscationFile $PWD/$study/dateObfuscation.txt \
-    --schema ApidbUserDatasets \
-    --userDatasetId $userDatasetId \
-    --commit
-    --gusconfigfile temp_gus.config #    --valueMappingFile $PWD/$study/valueMapping.txt  --ontologyMappingOverrideFileBaseName termOverride.xml
+for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
 
+my $dbh;
+unless ($DRYRUN) {
+  my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
+  print STDERR "connect string: $connectString\n";
+  $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS})
+    || die "Couldn't connect to database: " . DBI->errstr;
+}
+$dbh->{RaiseError} = 1;
+$dbh->{AutoCommit} = 1;
 
-ga ApiCommonData::Load::Plugin::LoadAttributesFromEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --logDir $PWD \
-    --runRLocally \
-    --commit
-    --gusconfigfile temp_gus.config
+my $indxTableSpace = $ENV{DB_PLATFORM} eq 'Oracle'? " tablespace indx" : "";
 
-ga ApiCommonData::Load::Plugin::LoadEntityTypeAndAttributeGraphs \
-    --logDir $PWD \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --ontologyExtDbRlsSpec "${study}_terms|dontcare" \
-    --commit
-    --gusconfigfile temp_gus.config
+my $installJsonFile = "$inputDir/install.json";
 
- ga ApiCommonData::Load::Plugin::LoadDatasetSpecificEntityGraph \
-    --extDbRlsSpec "${study}|dontcare" \
-    --schema ApidbUserDatasets \
-    --commit
-    --gusconfigfile temp_gus.config
+die "No install.json file found." unless -e $installJsonFile;
 
- ga ApiCommonData::Load::Plugin::InsertUserDatasetAttributes \
-     --userDatasetId $userDatasetId \
-     --metadataFile $metadataFile \
-     --commit
-     --gusconfigfile temp_gus.config
+# parse json file containing table/index/view configurations
+open my $fh, '<', $installJsonFile or die "error opening $installJsonFile: $!";
+my $jsonString = do { local $/; <$fh> };
+my $configsArray = decode_json($jsonString);
 
- # clean out tables not used by the application with partial delete
- deleteStudy.pl $userDatasetId 1
- 
+# validate that we have all needed files
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'table';
+  my $cacheFile = "$inputDir/$config->{name}.cache";
+  die "Can't find $cacheFile" unless -e "$cacheFile";
+}
+
+# write json file to data files dir (do this first, because it's needed to control an uninstall)
+my $datasetDir = "$ENV{DATA_FILES}";
+copy($installJsonFile, "$datasetDir/install.json");
+
+# loop through tables.  if not preexisting, create table.  use bulk loader to load rows
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'table';
+  if ($config->{is_preexisting_table}) {
+    loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
+  } else {
+    createTable($dbh, $ENV{DB_SCHEMA}, $config);
+    bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
+  }
+}
+
+# loop through indexes
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'index';
+  createIndex($dbh, $ENV{DB_SCHEMA}, $config, $indxTableSpace);
+}
+
+# loop through views
+foreach my $config (@$configsArray) {
+  next unless $config->{type} eq 'view';
+  createView($dbh, $ENV{DB_SCHEMA}, $config);
+}
+
+##################################################################################################
+# subroutines
+#################################################################################################
+
+# we don't use bulk loading for these tables because we insert very few rows, and they have macros
+sub loadTable {
+  my ($inputDir, $dbh, $schema, $platform, $tableConfig, $userDatasetId) = @_;
+
+  my @colNames;
+  my $fields = $tableConfig->{fields};
+  my $tableName = $tableConfig->{name};
+  print STDERR "Loading table $tableName\n";
+  foreach my $field (@$fields) {
+    push(@colNames, $field->{name});
+  }
+  my $colNamesStr = join(", ", @colNames);
+  my $file = "$inputDir/$tableName.cache";
+  open my $info, $file or die "Could not open $file: $!";
+
+  my @values;
+  while( my $line = <$info>) {
+    # Strip any trailing newlines
+    $line =~ s/\n+$//;
+    # Use -1 as the last arg to preserve trailing empty columns
+    my @v = split(/\t/, $line, -1);
+    my @values;
+    my $count = 0;
+    foreach my $v (@v) {
+      push(@values, mapColValues($v, $userDatasetId, $schema, $platform, $fields->[$count]->{type}));
+      $count += 1;
+    }
+    my $valuesStr = join(", ", @values);
+    my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
+    $sql .= " FROM DUAL" if $platform eq "Oracle";
+    print STDERR "$sql\n\n";
+    $dbh->do($sql) unless $DRYRUN;
+  }
+  $dbh->commit() unless $DRYRUN;
+  close $info;
+}
+
+# only used for preexisting tables
+sub mapColValues {
+  my ($valueFromFile, $userDatasetId, $schema, $platform, $colType) = @_;
+
+  if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
+  if ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
+  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
+  if ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@') { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
+  if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE') and $valueFromFile eq "")  { return "NULL"; }
+  if ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE') { return "'$valueFromFile'"; }
+  return $valueFromFile;
+}
+
+sub createTable {
+  my ($dbh, $schema, $tableConfig) = @_;
+
+  my $tableName = "$schema.$tableConfig->{name}";
+  print STDERR "Creating table $tableName\n";
+  my $cols = createColumns($tableConfig);
+
+  my $create = "
+CREATE TABLE $tableName (
+$cols
+)
+";
+  print STDERR "$create\n";
+  $dbh->do($create) unless $DRYRUN;
+
+  my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
+  print STDERR "$grantVdiW\n";
+  $dbh->do($grantVdiW) unless $DRYRUN;
+
+  my $grantGusR = "GRANT SELECT on $tableName to gus_r";
+  print STDERR "$grantGusR\n";
+  $dbh->do($grantGusR) unless $DRYRUN;
+}
+
+sub createColumns {
+  my ($tableConfig) = @_;
+
+  my @colSpecs;
+  my $fields = $tableConfig->{fields};
+  foreach my $field (@$fields) {
+    my $colSpec = $field->{name};
+    if ($field->{type} eq 'SQL_VARCHAR') {
+      $colSpec .= " VARCHAR" . ($field->{maxLength} eq 'NA'? "" : "($field->{maxLength})");
+    } elsif ($field->{type} eq 'SQL_DATE') {
+      $colSpec .= " DATE";
+    } elsif ($field->{type} eq 'SQL_NUMBER')  {
+      $colSpec .= " NUMBER" . ($field->{prec} eq 'NA'? "" : "($field->{prec})");
+    } else { die "unrecognized SQL type: " + $field->{type}}
+    $colSpec .= $field->{isNullable} eq 'YES'? "" : " NOT NULL";
+    push(@colSpecs, $colSpec);
+  }
+  return join(",\n", @colSpecs);
+}
+
+sub bulkLoadTable {
+  my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
+
+  print STDERR "Bulk loading table $tableConfig->{name}\n";
+  if ($platform eq 'Oracle') {
+    my $controlFileName = $tableConfig->{name} . '.ctl';
+    my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
+    my $logFileName = $tableConfig->{name} . '.log';
+    my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
+    writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
+    my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
+    unless ($DRYRUN) { system($cmdLine) && die "Failed running $cmdLine $!\n"; }
+   }
+}
+
+sub createIndex {
+  my ($dbh, $schema, $indexConfig, $indxTableSpace) = @_;
+
+  my $indexName = "$schema.$indexConfig->{name}";
+  my $colArray = $indexConfig->{orderedColumns};
+  my $cols = join(", ", @$colArray);
+  my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";
+  print STDERR "$createIndex\n\n";
+  $dbh->do($createIndex) unless $DRYRUN;
+}
+
+sub createView {
+  my ($dbh, $schema, $viewConfig) = @_;
+
+  my $viewName = "$schema.$viewConfig->{name}";
+  my $def = $viewConfig->{definition};
+  $def =~ s/\@SCHEMA\@/$schema/g;
+  my $createView = "CREATE VIEW $viewName as $def";
+  print STDERR "$createView\n\n";
+  $dbh->do($createView) unless $DRYRUN;
+}
+
+# sqlldr userid=dbuser@\"\(description=\(address=\(host=remote.db.com\)\(protocol=tcp\)\(port=1521\)\)\(connect_data=\(sid=dbsid\)\)\)\"/dbpass control=controlfilename.ctl data=data.csv
+
+sub getSqlLdrCmdLine {
+  my ($login, $password, $host, $port, $dbname, $controlFileName, $logFileName, $direct) = @_;
+
+  my $connectStr = "\"(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SERVICE_NAME=$dbname)))\"";
+
+  my $cmd = "sqlldr '$login/$password\@$connectStr' control=$controlFileName errors=0 discardmax=0 log=$logFileName ";
+  $cmd .= $direct?
+    "streamsize=512000 direct=TRUE" :
+    "rows=5000 bindsize=2048000 readsize=1048576";
+
+  return $cmd . ' >/dev/null 2>&1';
+}
+
+sub writeSqlloaderCtl {
+  my ($orderedFields, $schema, $tableName, $ctlFileName, $dataFileName, $append) = @_;
+
+  my @colSpecs;
+  foreach my $field (@$orderedFields) {
+    my $colSpec;
+    if ($field->{type} eq 'SQL_VARCHAR') { $colSpec= "CHAR( $field->{maxLength} )"; }
+    elsif ($field->{type} eq 'SQL_DATE') { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
+    elsif ($field->{type} eq 'SQL_NUMBER')  { $colSpec =  "CHAR"; }  #use default here for numbers
+    else { die "unrecognized SQL type: " + $field->{type}}
+
+    push(@colSpecs, "$field->{name} $colSpec");
+  }
+
+  my $colSpecsStr = join(",\n", @colSpecs);
+  my $appendStr = $append? "APPEND" : "";
+  open(CTL, ">$ctlFileName") || die "Can't open '$ctlFileName' for writing";
+  print CTL <<"EOF";
+     LOAD DATA
+     CHARACTERSET UTF8
+     LENGTH SEMANTICS CHAR
+     INFILE '$dataFileName'
+     $appendStr
+     INTO TABLE $schema.$tableName
+     REENABLE DISABLED_CONSTRAINTS
+     FIELDS TERMINATED BY '\\t'
+     TRAILING NULLCOLS
+    ($colSpecsStr
+    )
+EOF
+  close(CTL);
+}
