@@ -180,7 +180,8 @@ sub createColumns {
   foreach my $field (@$fields) {
     my $colSpec = $field->{name};
     if ($field->{type} eq 'SQL_VARCHAR') {
-      $colSpec .= " VARCHAR" . ($field->{maxLength} eq 'NA'? "" : "($field->{maxLength})");
+      if ($field->{maxLength} > 4000) { $colSpec .= " CLOB"; }
+      else { $colSpec .= " VARCHAR" . ($field->{maxLength} eq 'NA'? "" : "($field->{maxLength})"); }
     } elsif ($field->{type} eq 'SQL_DATE') {
       $colSpec .= " DATE";
     } elsif ($field->{type} eq 'SQL_NUMBER')  {
