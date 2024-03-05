@@ -14,7 +14,7 @@ RUN perl -MCPAN -e 'install qq(Switch)' \
 COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
-RUN wget -O fbw.zip https://github.com/VEuPathDB/script-find-bin-width/releases/download/v1.0.0/fbw-linux-1.0.0.zip \
+RUN wget -O fbw.zip https://github.com/VEuPathDB/script-find-bin-width/releases/download/v1.0.1/fbw-linux-1.0.1.zip \
     && unzip fbw.zip \
     && rm fbw.zip \
     && mv find-bin-width /usr/bin/find-bin-width
