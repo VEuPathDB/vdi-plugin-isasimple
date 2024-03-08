@@ -72,6 +72,7 @@ foreach my $filename (@files) {
   my $ifh;
   open($ifh, "<$filepath") || die "Cannot read file '$filepath' : $!\n";
 
+  # TODO: in the future consider validating that the input is UTF-8 compatible (as required by downstream perl code)
   my $csv = Text::CSV->new({binary => 1, sep_char => $delim, quote_char => '"' });
 
   unless ($csv) {
