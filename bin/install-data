@@ -204,7 +204,26 @@ sub bulkLoadTable {
     my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
     writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
-    unless ($DRYRUN) { system($cmdLine) && die "Failed running $cmdLine $!\n"; }
+
+    unless ($DRYRUN) {
+      my $exitCode = system($cmdLine);
+      my $error = "$!";
+
+      if ($exitCode) {
+        my $logFileName = $tableConfig->{name} . ".log";
+
+        if (-f $logFileName) {
+          open(LF, $logFileName);
+          while (my $logLine = <LF>) {
+            print STDERR "$logLine";
+          }
+          close(LF);
+        }
+
+        $cmdLine =~ s/\Q$dbPassword/******/gi;
+        $exitCode && die "Failed running $cmdLine $error\n";
+      }
+    }
    }
 }
 
