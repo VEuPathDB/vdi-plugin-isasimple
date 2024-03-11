@@ -42,7 +42,6 @@ for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$
 my $dbh;
 unless ($DRYRUN) {
   my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
-  print STDERR "connect string: $connectString\n";
   $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS})
     || die "Couldn't connect to database: " . DBI->errstr;
 }
@@ -128,7 +127,6 @@ sub loadTable {
     my $valuesStr = join(", ", @values);
     my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
     $sql .= " FROM DUAL" if $platform eq "Oracle";
-    print STDERR "$sql\n\n";
     $dbh->do($sql) unless $DRYRUN;
   }
   $dbh->commit() unless $DRYRUN;
@@ -160,15 +158,12 @@ CREATE TABLE $tableName (
 $cols
 )
 ";
-  print STDERR "$create\n";
   $dbh->do($create) unless $DRYRUN;
 
   my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
-  print STDERR "$grantVdiW\n";
   $dbh->do($grantVdiW) unless $DRYRUN;
 
   my $grantGusR = "GRANT SELECT on $tableName to gus_r";
-  print STDERR "$grantGusR\n";
   $dbh->do($grantGusR) unless $DRYRUN;
 }
 
@@ -234,7 +229,6 @@ sub createIndex {
   my $colArray = $indexConfig->{orderedColumns};
   my $cols = join(", ", @$colArray);
   my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";
-  print STDERR "$createIndex\n\n";
   $dbh->do($createIndex) unless $DRYRUN;
 }
 
@@ -245,7 +239,6 @@ sub createView {
   my $def = $viewConfig->{definition};
   $def =~ s/\@SCHEMA\@/$schema/g;
   my $createView = "CREATE VIEW $viewName as $def";
-  print STDERR "$createView\n\n";
   $dbh->do($createView) unless $DRYRUN;
 }
 
