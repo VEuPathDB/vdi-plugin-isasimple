@@ -201,13 +201,25 @@ sub bulkLoadTable {
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
 
     unless ($DRYRUN) {
-      my $exitCode = system($cmdLine);
-      my $error = "$!";
+      if (system($cmdLine)) {
+        print STDERR ">>> sqlldr execution failed: $!";
 
-      if ($exitCode) {
+        $cmdLine =~ s/\Q$dbPassword/******/gi;
+        print STDERR ">>> sqlldr failed command: $cmdLine";
+
+        print STDERR ">>> sqlldr $controlFileName file content";
+
+        open(LF, $controlFileName);
+        while (my $ctlLine = <LF>) {
+          print STDERR "$ctlLine";
+        }
+        close(LF);
+
         my $logFileName = $tableConfig->{name} . ".log";
 
         if (-f $logFileName) {
+          print STDERR ">>> sqlldr $logFileName file content";
+
           open(LF, $logFileName);
           while (my $logLine = <LF>) {
             print STDERR "$logLine";
@@ -215,11 +227,22 @@ sub bulkLoadTable {
           close(LF);
         }
 
-        $cmdLine =~ s/\Q$dbPassword/******/gi;
-        $exitCode && die "Failed running $cmdLine $error\n";
+        my $badFileName = $tableConfig->{name} . ".bad";
+
+        if (-f $badFileName) {
+          print STDERR ">>> sqllder $badFileName file content";
+
+          open(LF, $badFileName);
+          while (my $badLine = <LF>) {
+            print STDERR "$badLine";
+          }
+          close(LF);
+        }
+
+        die;
       }
     }
-   }
+  }
 }
 
 sub createIndex {
@@ -264,7 +287,7 @@ sub writeSqlloaderCtl {
   foreach my $field (@$orderedFields) {
     my $colSpec;
     if ($field->{type} eq 'SQL_VARCHAR') {
-      $field->{maxLength} >= 1048576? "FILLER" : "CHAR( $field->{maxLength} )";  # sqlldr can't handle fields > 1M
+      $colSpec = $field->{maxLength} >= 1048576 ? "FILLER" : "CHAR( $field->{maxLength} )";  # sqlldr can't handle fields > 1M
       print STDERR "Skipping vocabulary that is too large\n";
     }
     elsif ($field->{type} eq 'SQL_DATE') { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
