@@ -202,12 +202,12 @@ sub bulkLoadTable {
 
     unless ($DRYRUN) {
       if (system($cmdLine)) {
-        print STDERR ">>> sqlldr execution failed: $!";
+        print STDERR ">>> sqlldr execution failed: $!\n\n";
 
         $cmdLine =~ s/\Q$dbPassword/******/gi;
-        print STDERR ">>> sqlldr failed command: $cmdLine";
+        print STDERR ">>> sqlldr failed command: $cmdLine\n\n";
 
-        print STDERR ">>> sqlldr $controlFileName file content";
+        print STDERR ">>> sqlldr $controlFileName file content\n\n";
 
         open(LF, $controlFileName);
         while (my $ctlLine = <LF>) {
@@ -218,7 +218,7 @@ sub bulkLoadTable {
         my $logFileName = $tableConfig->{name} . ".log";
 
         if (-f $logFileName) {
-          print STDERR ">>> sqlldr $logFileName file content";
+          print STDERR ">>> sqlldr $logFileName file content\n\n";
 
           open(LF, $logFileName);
           while (my $logLine = <LF>) {
@@ -230,7 +230,7 @@ sub bulkLoadTable {
         my $badFileName = $tableConfig->{name} . ".bad";
 
         if (-f $badFileName) {
-          print STDERR ">>> sqllder $badFileName file content";
+          print STDERR ">>> sqllder $badFileName file content\n\n";
 
           open(LF, $badFileName);
           while (my $badLine = <LF>) {
