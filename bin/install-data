@@ -287,7 +287,7 @@ sub writeSqlloaderCtl {
   foreach my $field (@$orderedFields) {
     my $colSpec;
     if ($field->{type} eq 'SQL_VARCHAR') {
-      $colSpec = $field->{maxLength} >= 1048576 ? "FILLER" : "CHAR( $field->{maxLength} )";  # sqlldr can't handle fields > 1M
+      $colSpec = $field->{maxLength} >= 1048576 ? "FILLER CHAR(1048576)" : "CHAR( $field->{maxLength} )";  # sqlldr can't handle fields > 1M
       print STDERR "Skipping vocabulary that is too large\n";
     }
     elsif ($field->{type} eq 'SQL_DATE') { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
