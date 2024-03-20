@@ -110,7 +110,12 @@ foreach my $filename (@files) {
 	last;
       }
       foreach my $col (@$headers){
-        my $len = length( shift(@$row) );
+	my $val = shift(@$row);
+	if ($val =~ /^[-+]?(?:\d+|\d*(?:\.\d+))[eE][-+]?(\d+)$/ && $1 > 100) {
+	  trackValidationError($filename, "Value '$val' has more than maximum allowed precision of 100 decimal places.  Please consider updating this column to have only exponents.");
+	  last;
+	}
+        my $len = length(  );
         $maxlen{$col} ||= $len;
         if($len > $MAXLENGTH){
           $maxlen{$col} = $len;
