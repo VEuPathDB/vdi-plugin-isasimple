@@ -106,16 +106,16 @@ foreach my $filename (@files) {
     while(my $row = $csv->getline( $ifh )) {
       $lines++;
       if (scalar(@$row) != scalar(@$headers)) {
-	trackValidationError($filename, "Row $lines has incorrect number of columns");
-	last;
+        trackValidationError($filename, "Row $lines has incorrect number of columns");
+        last;
       }
       foreach my $col (@$headers){
-	my $val = shift(@$row);
-	if ($val =~ /^[-+]?(?:\d+|\d*(?:\.\d+))[eE][-+]?(\d+)$/ && $1 > 100) {
-	  trackValidationError($filename, "Value '$val' has more than maximum allowed precision of 100 decimal places.  Please consider updating this column to have only exponents.");
-	  last;
-	}
-        my $len = length(  );
+        my $val = shift(@$row);
+        if ($val =~ /^[-+]?(?:\d+|\d*(?:\.\d+))[eE][-+]?(\d+)$/ && $1 > 100) {
+          trackValidationError($filename, "Value '$val' has more than maximum allowed precision of 100 decimal places.  Please consider updating this column to have only exponents.");
+          last;
+        }
+        my $len = length($val);
         $maxlen{$col} ||= $len;
         if($len > $MAXLENGTH){
           $maxlen{$col} = $len;
