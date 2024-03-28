@@ -30,4 +30,4 @@ RUN git clone https://github.com/VEuPathDB/lib-vdi-plugin-study.git \
 COPY bin /opt/veupathdb/bin/
 COPY lib/xml/* /usr/local/lib/xml/
 
-CMD run-plugin.sh
+CMD ["run-plugin.sh"]
