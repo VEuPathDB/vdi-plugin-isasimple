@@ -110,9 +110,12 @@ foreach my $filename (@files) {
         last;
       }
       foreach my $col (@$headers){
-        my $val = shift(@$row);
+	my $val = shift(@$row);
+	if ($val =~ /,/) {
+	  trackValidationError($filename,  "On line $lines, column '$row', the value '$val' includes commas, which are not allowed.");
+	}
         if ($val =~ /^[-+]?(?:\d+|\d*(?:\.\d+))[eE][-+]?(\d+)$/ && $1 > 100) {
-          trackValidationError($filename, "Value '$val' has more than maximum allowed precision of 100 decimal places.  Please consider updating this column to have only exponents.");
+          trackValidationError($filename, "On line $lines, column '$row', the value '$val' has more than the maximum allowed precision of 100 decimal places.  Fix this by converting the values in this column to just exponents.");
           last;
         }
         my $len = length($val);
