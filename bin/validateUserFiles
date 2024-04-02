@@ -154,5 +154,6 @@ exit $VALIDATION_ERR_CODE if ($invalidCount > 0);
 sub trackValidationError {
   my ($filename, $message) = @_;
   $results->{$filename} //= [];
+  return if scalar(@{ $results->{$filename} }) == 10; # track only up to 10 errors, to not produce too long a message
   push( @{ $results->{$filename} }, $message );
 }
