@@ -110,9 +110,14 @@ foreach my $filename (@files) {
         last;
       }
       foreach my $col (@$headers){
-        my $val = shift(@$row);
+	my $val = shift(@$row);
+	if ($val =~ /,/) {
+	  trackValidationError($filename,  "On line $lines, column '$col', the value '$val' includes commas, which are not allowed.");
+	}
+        # this regex attempts to match numbers in scientific notation, and capture the exponent.  We only allow exponents up to +/-100.
+        # (the sci notation ultimately gets expanded, and we need to avoid having too many digits.)
         if ($val =~ /^[-+]?(?:\d+|\d*(?:\.\d+))[eE][-+]?(\d+)$/ && $1 > 100) {
-          trackValidationError($filename, "Value '$val' has more than maximum allowed precision of 100 decimal places.  Please consider updating this column to have only exponents.");
+          trackValidationError($filename, "On line $lines, column '$col', the value '$val' has more than the maximum allowed precision of 100 decimal places.  Fix this by converting the values in this column to just exponents.");
           last;
         }
         my $len = length($val);
@@ -151,5 +156,6 @@ exit $VALIDATION_ERR_CODE if ($invalidCount > 0);
 sub trackValidationError {
   my ($filename, $message) = @_;
   $results->{$filename} //= [];
+  return if scalar(@{ $results->{$filename} }) == 10; # track only up to 10 errors, to not produce too long a message
   push( @{ $results->{$filename} }, $message );
 }
