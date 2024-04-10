@@ -66,9 +66,9 @@ foreach my $config (@$configsArray) {
   die "Can't find $cacheFile" unless -e "$cacheFile";
 }
 
-# write json file to data files dir (do this first, because it's needed to control an uninstall)
-my $datasetDir = "$ENV{DATA_FILES}";
-copy($installJsonFile, "$datasetDir/install.json");
+# Create data files dir containing the install.json file _before_ loading data
+# because that file is needed to control an uninstall.
+createDatasetDir($installJsonFile);
 
 # loop through tables.  if not preexisting, create table.  use bulk loader to load rows
 foreach my $config (@$configsArray) {
@@ -96,6 +96,27 @@ foreach my $config (@$configsArray) {
 ##################################################################################################
 # subroutines
 #################################################################################################
+
+# Creates an install directory for the dataset being installed, copying into it
+# the install.json file that is needed by the uninstall script to delete the
+# dataset's tables from a target app database.
+sub createDatasetDir {
+  my ($inputInstallJsonPath) = @_;
+
+  my $datasetDir = "$ENV{DATA_FILES}";
+
+  if (-e $datasetDir) {
+    die "dataset directory $datasetDir already exists\n";
+  }
+
+  my $targetInstallJsonPath = "$datasetDir/install.json";
+
+  mkdir($datasetDir) || die "failed to create dataset dir $datasetDir\n";
+  chmod(0775, $datasetDir) || die "failed to chmod $datasetDir\n";
+
+  copy($inputInstallJsonPath, $targetInstallJsonPath) || die "failed to copy $inputInstallJsonPath to $datasetDir\n";
+  chmod(0664, $targetInstallJsonPath) || die "failed to chmod $targetInstallJsonPath\n";
+}
 
 # we don't use bulk loading for these tables because we insert very few rows, and they have macros
 sub loadTable {
