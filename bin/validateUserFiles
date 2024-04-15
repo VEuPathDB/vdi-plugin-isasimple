@@ -111,8 +111,8 @@ foreach my $filename (@files) {
       }
       foreach my $col (@$headers){
 	my $val = shift(@$row);
-	if ($val =~ /,/) {
-	  trackValidationError($filename,  "On line $lines, column '$col', the value '$val' includes commas, which are not allowed.");
+	if ($val =~ /^[,\d]+$/ && $val =~ /,/) {
+	  trackValidationError($filename,  "On line $lines, column '$col', the value '$val' is a number with commas.  These are not allowed.");
 	}
         # this regex attempts to match numbers in scientific notation, and capture the exponent.  We only allow exponents up to +/-100.
         # (the sci notation ultimately gets expanded, and we need to avoid having too many digits.)
