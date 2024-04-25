@@ -60,4 +60,5 @@ log "Begin Loading ..."
 nextflow -C ${WORKING_DIR}/nextflow.config \
   run $PROJECT_HOME/eda-nextflow/main.nf \
   -ansi-log false \
-  -entry loadUserDataset
+  -entry loadUserDataset \
+  1>&2
