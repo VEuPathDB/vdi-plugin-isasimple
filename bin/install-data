@@ -41,9 +41,19 @@ for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$
 
 my $dbh;
 unless ($DRYRUN) {
-  my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
-  $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS})
-    || die "Couldn't connect to database: " . DBI->errstr;
+  if ($ENV{DB_PLATFORM} eq "Oracle") {
+    my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
+    print STDERR "Connecting to $connectString\n";
+    $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS}) || die "Couldn't connect to database: " . DBI->errstr;
+  } elsif ($ENV{DB_PLATFORM} eq "Postgresql") {
+    my $connectString = "dbi:Pg:dbname=$ENV{DB_NAME};host=$ENV{DB_HOST};port=$ENV{DB_PORT}";
+    print STDERR "Connecting to $connectString\n";
+    $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS}) || die "Couldn't connect to database: " . DBI->errstr;
+  } else {
+    my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
+    print STDERR "Connecting to $connectString\n";
+    $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS}) || die "Couldn't connect to database: " . DBI->errstr;
+  }
 }
 $dbh->{RaiseError} = 1;
 $dbh->{AutoCommit} = 1;
@@ -77,14 +87,18 @@ foreach my $config (@$configsArray) {
     loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
   } else {
     createTable($dbh, $ENV{DB_SCHEMA}, $config);
-    bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
+    if ($ENV{DB_PLATFORM} eq 'Oracle') {
+      bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
+    } else {
+      loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
+    }
   }
 }
 
 # loop through indexes
 foreach my $config (@$configsArray) {
   next unless $config->{type} eq 'index';
-  createIndex($dbh, $ENV{DB_SCHEMA}, $config, $indxTableSpace);
+  createIndex($dbh, $ENV{DB_PLATFORM}, $ENV{DB_SCHEMA}, $config, $indxTableSpace);
 }
 
 # loop through views
@@ -148,6 +162,7 @@ sub loadTable {
     my $valuesStr = join(", ", @values);
     my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
     $sql .= " FROM DUAL" if $platform eq "Oracle";
+    print STDERR "SQL: $sql\n";
     $dbh->do($sql) unless $DRYRUN;
   }
   $dbh->commit() unless $DRYRUN;
@@ -160,9 +175,9 @@ sub mapColValues {
 
   if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
   if ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
-  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
+  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "current_timestamp" ; }
   if ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@') { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
-  if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE') and $valueFromFile eq "")  { return "NULL"; }
+  if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE' or $colType eq 'SQL_VARCHAR') and $valueFromFile eq "")  { return "NULL"; }
   if ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE') { return "'$valueFromFile'"; }
   return $valueFromFile;
 }
@@ -201,7 +216,7 @@ sub createColumns {
     } elsif ($field->{type} eq 'SQL_DATE') {
       $colSpec .= " DATE";
     } elsif ($field->{type} eq 'SQL_NUMBER')  {
-      $colSpec .= " NUMBER" . ($field->{prec} eq 'NA'? "" : "($field->{prec})");
+      $colSpec .= ($field->{platform} eq 'Oracle' ? " NUMBER" : " NUMERIC") . ($field->{prec} eq 'NA'? "" : "($field->{prec})");
     } else { die "unrecognized SQL type: " + $field->{type}}
     $colSpec .= $field->{isNullable} eq 'YES'? "" : " NOT NULL";
     push(@colSpecs, $colSpec);
@@ -267,9 +282,14 @@ sub bulkLoadTable {
 }
 
 sub createIndex {
-  my ($dbh, $schema, $indexConfig, $indxTableSpace) = @_;
+  my ($dbh, $platform, $schema, $indexConfig, $indxTableSpace) = @_;
 
-  my $indexName = "$schema.$indexConfig->{name}";
+  my $indexName;
+  if ($platform eq "Postgresql") {
+    $indexName = "$indexConfig->{name}";
+  } else {
+    $indexName = "$schema.$indexConfig->{name}";
+  }
   my $colArray = $indexConfig->{orderedColumns};
   my $cols = join(", ", @$colArray);
   my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";

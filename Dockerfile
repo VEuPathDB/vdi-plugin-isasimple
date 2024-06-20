@@ -1,4 +1,4 @@
-FROM veupathdb/vdi-plugin-base:6.0.1
+FROM veupathdb/vdi-plugin-base:latest
 
 ARG APICOMMONDATA_COMMIT_HASH=699a94aab7c853205274aed2039ce0d2e4b76e30 \
     CLINEPIDATA_GIT_COMMIT_SHA=8d31ba1b5cf7f6b022058b7c89e8e3ab0665f543 \
@@ -10,7 +10,8 @@ RUN perl -MCPAN -e 'install qq(Switch)' \
     && perl -MCPAN -e 'install qq(Text::Unidecode)' \
     && perl -MCPAN -e 'install qq(Date::Calc)' \
     && perl -MCPAN -e 'install qq(XML::Simple)' \
-    && perl -MCPAN -e 'install qq(Digest::SHA1)'
+    && perl -MCPAN -e 'install qq(Digest::SHA1)' \
+    && perl -MCPAN -e 'install qq(DBD::Pg)'
 
 COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
