@@ -162,7 +162,6 @@ sub loadTable {
     my $valuesStr = join(", ", @values);
     my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
     $sql .= " FROM DUAL" if $platform eq "Oracle";
-    print STDERR "SQL: $sql\n";
     $dbh->do($sql) unless $DRYRUN;
   }
   $dbh->commit() unless $DRYRUN;
