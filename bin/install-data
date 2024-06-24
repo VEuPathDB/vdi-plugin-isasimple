@@ -50,9 +50,7 @@ unless ($DRYRUN) {
     print STDERR "Connecting to $connectString\n";
     $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS}) || die "Couldn't connect to database: " . DBI->errstr;
   } else {
-    my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
-    print STDERR "Connecting to $connectString\n";
-    $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS}) || die "Couldn't connect to database: " . DBI->errstr;
+    die "Unsupported DB_PLATFORM $ENV{DB_PLATFORM}";
   }
 }
 $dbh->{RaiseError} = 1;
@@ -87,11 +85,7 @@ foreach my $config (@$configsArray) {
     loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
   } else {
     createTable($dbh, $ENV{DB_SCHEMA}, $config);
-    if ($ENV{DB_PLATFORM} eq 'Oracle') {
-      bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
-    } else {
-      loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
-    }
+    bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
   }
 }
 
@@ -174,7 +168,7 @@ sub mapColValues {
 
   if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
   if ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
-  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "current_timestamp" ; }
+  if ($valueFromFile eq '@MODIFICATION_DATE@') { return $platform eq 'Oracle' ? "sysdate" : "current_timestamp::timestamp" ; }
   if ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@') { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
   if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE' or $colType eq 'SQL_VARCHAR') and $valueFromFile eq "")  { return "NULL"; }
   if ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE') { return "'$valueFromFile'"; }
@@ -224,14 +218,14 @@ sub createColumns {
 }
 
 sub bulkLoadTable {
-  my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
+  my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig, $orderedFields) = @_;
 
   print STDERR "Bulk loading table $tableConfig->{name}\n";
   if ($platform eq 'Oracle') {
     my $controlFileName = $tableConfig->{name} . '.ctl';
     my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
     my $logFileName = $tableConfig->{name} . '.log';
-    my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
+    my $direct = $tableConfig->{is_preexisting_table} ? 0 : 1;
     writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
     my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
 
@@ -265,7 +259,7 @@ sub bulkLoadTable {
         my $badFileName = $tableConfig->{name} . ".bad";
 
         if (-f $badFileName) {
-          print STDERR ">>> sqllder $badFileName file content\n\n";
+          print STDERR ">>> sqlldr $badFileName file content\n\n";
 
           open(LF, $badFileName);
           while (my $badLine = <LF>) {
@@ -277,6 +271,33 @@ sub bulkLoadTable {
         die;
       }
     }
+  } else {
+    my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
+    my $tableName = $tableConfig->{name};
+    my $fields = $tableConfig->{fields};
+    my $colSpec = "(";
+    foreach my $field (@$fields) {
+      $colSpec .= $field->{name} . ",";
+    }
+    print STDERR "$colSpec\n";
+    $colSpec =~ s/,$//;  # Remove the trailing comma
+    $colSpec .= ")";
+
+    # Use backspace as the quote character to avoid stripping out quotes leaving invalid JSON for array columns.
+    my $copySql = "COPY $tableName $colSpec FROM STDIN WITH (FORMAT CSV, DELIMITER E'\t', HEADER false, QUOTE E'\b')";
+
+    open(my $fh, '<', $dataFileName) or die "Could not open file '$dataFileName' $!";
+
+    my $sth = $dbh->prepare($copySql);
+    $sth->execute();
+
+    while (my $line = <$fh>) {
+        $dbh->pg_putcopydata($line);
+    }
+
+    # Finish the COPY process
+    $dbh->pg_putcopyend();    
+    close($fh);
   }
 }
 
