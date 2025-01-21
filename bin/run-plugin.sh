@@ -5,7 +5,7 @@ trap gracefulShutdown EXIT
 # Attempts to cleanly shut down the postgres instance.
 shutdownPostgres() {
   echo "Stopping Postgres server..."
-  su postgres -c '/usr/lib/postgresql/15/bin/pg_ctl stop -m fast'
+  su postgres -c '/usr/lib/postgresql/16/bin/pg_ctl stop -m fast'
 }
 
 # Attempts to cleanly shut down the HTTP server.
@@ -27,7 +27,7 @@ uglyShutdown() {
 }
 
 # Start the postgres server
-su postgres -c '/usr/lib/postgresql/15/bin/pg_ctl start'
+su postgres -c '/usr/lib/postgresql/16/bin/pg_ctl start'
 
 # Wait for postgres to be ready for connections
 timeout 90s bash -c "until pg_isready -U postgres; do sleep 5 ; done;"
