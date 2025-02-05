@@ -46,7 +46,11 @@ RUN /usr/bin/buildGus.bash
 # Install vdi plugin HTTP server
 RUN curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar" -LsO
 
+ENV PATH="$PATH:/opt/veupathdb/bin"
+
 COPY bin /opt/veupathdb/bin/
 COPY lib/xml/* /usr/local/lib/xml/
+
+RUN chmod +x /opt/veupathdb/bin/*
 
 CMD ["run-plugin.sh"]
