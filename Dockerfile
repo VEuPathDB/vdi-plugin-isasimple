@@ -1,11 +1,5 @@
 FROM veupathdb/gus-apidb-base:1.2.7
 
-ARG APICOMMONDATA_COMMIT_HASH=699a94aab7c853205274aed2039ce0d2e4b76e30 \
-    CLINEPIDATA_GIT_COMMIT_SHA=8d31ba1b5cf7f6b022058b7c89e8e3ab0665f543 \
-    EDA_NEXTFLOW_GIT_COMMIT_SHA=f113cca94b9d16695dc4ac721de211d72e7c396f \
-    SHARED_LIB_GIT_COMMIT_SHA=ee4853748fcdd5d7d8675eb0eb3828ea11da8f42
-
-ARG PLUGIN_SERVER_VERSION=v8.1.0-rc5
 
 ENV JVM_MEM_ARGS="-Xms16m -Xmx64m" \
     JVM_ARGS="" \
@@ -32,6 +26,9 @@ RUN wget -q -O fbw.zip https://github.com/VEuPathDB/script-find-bin-width/releas
     && rm fbw.zip \
     && mv find-bin-width /usr/bin/find-bin-width
 
+
+ARG SHARED_LIB_GIT_COMMIT_SHA=ee4853748fcdd5d7d8675eb0eb3828ea11da8f42
+
 RUN git clone https://github.com/VEuPathDB/lib-vdi-plugin-study.git \
     && cd lib-vdi-plugin-study \
     && git checkout ${SHARED_LIB_GIT_COMMIT_SHA} \
@@ -39,13 +36,21 @@ RUN git clone https://github.com/VEuPathDB/lib-vdi-plugin-study.git \
     && cp lib/perl/VdiStudyHandlerCommon.pm /opt/veupathdb/lib/perl \
     && cp bin/* /opt/veupathdb/bin
 
+
+ARG APICOMMONDATA_COMMIT_HASH=699a94aab7c853205274aed2039ce0d2e4b76e30 \
+    CLINEPIDATA_GIT_COMMIT_SHA=8d31ba1b5cf7f6b022058b7c89e8e3ab0665f543 \
+    EDA_NEXTFLOW_GIT_COMMIT_SHA=f113cca94b9d16695dc4ac721de211d72e7c396f
+
 # CLONE ADDITIONAL GIT REPOS
 COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
+
+ARG PLUGIN_SERVER_VERSION=v8.1.0-rc5
+
 # Install vdi plugin HTTP server
 RUN curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar" -LfsO \
-    && curl https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar.sha256 -LfsO \
+    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar.sha256" -LfsO \
     && sha256sum service.jar | grep -q "$(cat service.jar.sha256)" \
     && rm service.jar.sha256
 
