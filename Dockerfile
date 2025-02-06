@@ -5,7 +5,7 @@ ARG APICOMMONDATA_COMMIT_HASH=699a94aab7c853205274aed2039ce0d2e4b76e30 \
     EDA_NEXTFLOW_GIT_COMMIT_SHA=f113cca94b9d16695dc4ac721de211d72e7c396f \
     SHARED_LIB_GIT_COMMIT_SHA=ee4853748fcdd5d7d8675eb0eb3828ea11da8f42
 
-ARG PLUGIN_SERVER_VERSION=v8.1.0-rc4
+ARG PLUGIN_SERVER_VERSION=v8.1.0-rc5
 
 ENV JVM_MEM_ARGS="-Xms16m -Xmx64m" \
     JVM_ARGS="" \
@@ -44,7 +44,10 @@ COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
 # Install vdi plugin HTTP server
-RUN curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar" -LfsO
+RUN curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar" -LfsO \
+    && curl https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar.sha256 -LfsO \
+    && sha256sum service.jar | grep -q "$(cat service.jar.sha256)" \
+    && rm service.jar.sha256
 
 ENV PATH="$PATH:/opt/veupathdb/bin"
 
