@@ -50,7 +50,7 @@ ARG PLUGIN_SERVER_VERSION=v8.1.0-rc6
 
 # Install vdi plugin HTTP server
 RUN set -o pipefail \
-    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/docker-download.sh" -LfO --no-progress-meter | bash
+    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/docker-download.sh" -Lf --no-progress-meter | bash
 
 ENV PATH="$PATH:/opt/veupathdb/bin"
 
