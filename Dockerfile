@@ -46,13 +46,11 @@ COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
 
-ARG PLUGIN_SERVER_VERSION=v8.1.0-rc5
+ARG PLUGIN_SERVER_VERSION=v8.1.0-rc6
 
 # Install vdi plugin HTTP server
-RUN curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar" -LfsO \
-    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/service.jar.sha256" -LfsO \
-    && sha256sum service.jar | grep -q "$(cat service.jar.sha256)" \
-    && rm service.jar.sha256
+RUN set -o pipefail \
+    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/docker-download.sh" -LfO --no-progress-meter | bash
 
 ENV PATH="$PATH:/opt/veupathdb/bin"
 
