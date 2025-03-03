@@ -4,6 +4,11 @@ use DBI qw(:sql_types);
 use Time::HiRes qw ( time );
 use JSON qw( decode_json );
 use File::Copy;
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use InstallEdaStudyFromArtifacts;
+#use lib "$ENV{GUS_HOME}/lib/perl";
+
 use strict;
 
 my $SQLLDR_STREAM_SIZE = 512000;
@@ -11,13 +16,32 @@ my $SQLLDR_ROWS = 5000;
 my $SQLLDR_BINDSIZE = 2048000;
 my $SQLLDR_READSIZE = 1048576;
 
-my $DRYRUN = 0;
-
 my @envVars = ('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_PLATFORM', 'DB_USER', 'DB_PASS', 'DB_SCHEMA', 'DATA_FILES');
 
 my ($userDatasetId, $inputDir) = @ARGV;
 
 usage() unless scalar(@ARGV) == 2;
+
+for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
+
+my $dataFiles = $ENV{DATA_FILES} . '/' . $userDatasetId;
+
+my %requiredVars = ('DB_HOST' => $ENV{DB_HOST}, 
+                    'DB_PORT' => $ENV{DB_PORT}, 
+                    'DB_NAME' => $ENV{DB_NAME}, 
+                    'DB_PLATFORM' => $ENV{DB_PLATFORM}, 
+                    'DB_USER' => $ENV{DB_USER}, 
+                    'DB_PASS' => $ENV{DB_PASS}, 
+                    'DB_SCHEMA' => $ENV{DB_SCHEMA}, 
+                    'DATA_FILES' => $dataFiles, 
+                    'INPUT_DIR' => $inputDir,
+#		    'DRYRUN' => 1,
+		    'USER_DATASET_ID' => $userDatasetId
+    );
+
+my $installer = ApiCommonData::Load::InstallEdaStudyFromArtifacts->new(\%requiredVars);
+
+$installer->installData();
 
 sub usage {
 
@@ -37,299 +61,4 @@ Env: $envStr
 ";
 }
 
-for my $envVar (@envVars) { die "Missing env variable '$envVar'\n" unless $ENV{$envVar}; }
 
-my $dbh;
-unless ($DRYRUN) {
-  my $connectString = "dbi:$ENV{DB_PLATFORM}://$ENV{DB_HOST}:$ENV{DB_PORT}/$ENV{DB_NAME}";
-  $dbh = DBI->connect($connectString, $ENV{DB_USER}, $ENV{DB_PASS})
-    || die "Couldn't connect to database: " . DBI->errstr;
-}
-$dbh->{RaiseError} = 1;
-$dbh->{AutoCommit} = 1;
-
-my $indxTableSpace = $ENV{DB_PLATFORM} eq 'Oracle'? " tablespace indx" : "";
-
-my $installJsonFile = "$inputDir/install.json";
-
-die "No install.json file found." unless -e $installJsonFile;
-
-# parse json file containing table/index/view configurations
-open my $fh, '<', $installJsonFile or die "error opening $installJsonFile: $!";
-my $jsonString = do { local $/; <$fh> };
-my $configsArray = decode_json($jsonString);
-
-# validate that we have all needed files
-foreach my $config (@$configsArray) {
-  next unless $config->{type} eq 'table';
-  my $cacheFile = "$inputDir/$config->{name}.cache";
-  die "Can't find $cacheFile" unless -e "$cacheFile";
-}
-
-# Create data files dir containing the install.json file _before_ loading data
-# because that file is needed to control an uninstall.
-createDatasetDir($installJsonFile);
-
-# loop through tables.  if not preexisting, create table.  use bulk loader to load rows
-foreach my $config (@$configsArray) {
-  next unless $config->{type} eq 'table';
-  if ($config->{is_preexisting_table}) {
-    loadTable($inputDir, $dbh, $ENV{DB_SCHEMA}, $ENV{DB_PLATFORM}, $config, $userDatasetId)
-  } else {
-    createTable($dbh, $ENV{DB_SCHEMA}, $config);
-    bulkLoadTable($inputDir, $ENV{DB_PLATFORM}, $ENV{DB_USER}, $ENV{DB_PASS}, $ENV{DB_HOST}, $ENV{DB_PORT}, $ENV{DB_NAME}, $ENV{DB_SCHEMA}, $config);
-  }
-}
-
-# loop through indexes
-foreach my $config (@$configsArray) {
-  next unless $config->{type} eq 'index';
-  createIndex($dbh, $ENV{DB_SCHEMA}, $config, $indxTableSpace);
-}
-
-# loop through views
-foreach my $config (@$configsArray) {
-  next unless $config->{type} eq 'view';
-  createView($dbh, $ENV{DB_SCHEMA}, $config);
-}
-
-##################################################################################################
-# subroutines
-#################################################################################################
-
-# Creates an install directory for the dataset being installed, copying into it
-# the install.json file that is needed by the uninstall script to delete the
-# dataset's tables from a target app database.
-sub createDatasetDir {
-  my ($inputInstallJsonPath) = @_;
-
-  my $datasetDir = "$ENV{DATA_FILES}";
-
-  if (-e $datasetDir) {
-    die "dataset directory $datasetDir already exists\n";
-  }
-
-  my $targetInstallJsonPath = "$datasetDir/install.json";
-
-  mkdir($datasetDir) || die "failed to create dataset dir $datasetDir\n";
-  chmod(0775, $datasetDir) || die "failed to chmod $datasetDir\n";
-
-  copy($inputInstallJsonPath, $targetInstallJsonPath) || die "failed to copy $inputInstallJsonPath to $datasetDir\n";
-  chmod(0664, $targetInstallJsonPath) || die "failed to chmod $targetInstallJsonPath\n";
-}
-
-# we don't use bulk loading for these tables because we insert very few rows, and they have macros
-sub loadTable {
-  my ($inputDir, $dbh, $schema, $platform, $tableConfig, $userDatasetId) = @_;
-
-  my @colNames;
-  my $fields = $tableConfig->{fields};
-  my $tableName = $tableConfig->{name};
-  print STDERR "Loading table $tableName\n";
-  foreach my $field (@$fields) {
-    push(@colNames, $field->{name});
-  }
-  my $colNamesStr = join(", ", @colNames);
-  my $file = "$inputDir/$tableName.cache";
-  open my $info, $file or die "Could not open $file: $!";
-
-  my @values;
-  while( my $line = <$info>) {
-    # Strip any trailing newlines
-    $line =~ s/\n+$//;
-    # Use -1 as the last arg to preserve trailing empty columns
-    my @v = split(/\t/, $line, -1);
-    my @values;
-    my $count = 0;
-    foreach my $v (@v) {
-      push(@values, mapColValues($v, $userDatasetId, $schema, $platform, $fields->[$count]->{type}));
-      $count += 1;
-    }
-    my $valuesStr = join(", ", @values);
-    my $sql = "INSERT INTO $schema.$tableName ($colNamesStr) SELECT $valuesStr";
-    $sql .= " FROM DUAL" if $platform eq "Oracle";
-    $dbh->do($sql) unless $DRYRUN;
-  }
-  $dbh->commit() unless $DRYRUN;
-  close $info;
-}
-
-# only used for preexisting tables
-sub mapColValues {
-  my ($valueFromFile, $userDatasetId, $schema, $platform, $colType) = @_;
-
-  if ($valueFromFile eq '@USER_DATASET_ID@') { return "'$userDatasetId'"; }
-  if ($valueFromFile eq '@STUDY_ID@') { return $platform eq 'Oracle'? "$schema.study_sq.nextval" : "nextval($schema.study_sq)"; }
-  if ($valueFromFile eq '@MODIFICATION_DATE@') { return "SYSDATE" ; }
-  if ($valueFromFile eq '@ENTITY_TYPE_GRAPH_ID@') { return $platform eq 'Oracle'? "$schema.entitytypegraph_sq.nextval" : "nextval($schema.entitytypegraph_sq)"; }
-  if (($colType eq 'SQL_NUMBER' or $colType eq 'SQL_DATE') and $valueFromFile eq "")  { return "NULL"; }
-  if ($colType eq 'SQL_VARCHAR' or $colType eq 'SQL_DATE') { return "'$valueFromFile'"; }
-  return $valueFromFile;
-}
-
-sub createTable {
-  my ($dbh, $schema, $tableConfig) = @_;
-
-  my $tableName = "$schema.$tableConfig->{name}";
-  print STDERR "Creating table $tableName\n";
-  my $cols = createColumns($tableConfig);
-
-  my $create = "
-CREATE TABLE $tableName (
-$cols
-)
-";
-  $dbh->do($create) unless $DRYRUN;
-
-  my $grantVdiW = "GRANT INSERT, SELECT, UPDATE, DELETE on $tableName to vdi_w";
-  $dbh->do($grantVdiW) unless $DRYRUN;
-
-  my $grantGusR = "GRANT SELECT on $tableName to gus_r";
-  $dbh->do($grantGusR) unless $DRYRUN;
-}
-
-sub createColumns {
-  my ($tableConfig) = @_;
-
-  my @colSpecs;
-  my $fields = $tableConfig->{fields};
-  foreach my $field (@$fields) {
-    my $colSpec = $field->{name};
-    if ($field->{type} eq 'SQL_VARCHAR') {
-      if ($field->{maxLength} > 4000) { $colSpec .= " CLOB"; }
-      else { $colSpec .= " VARCHAR" . ($field->{maxLength} eq 'NA'? "" : "($field->{maxLength})"); }
-    } elsif ($field->{type} eq 'SQL_DATE') {
-      $colSpec .= " DATE";
-    } elsif ($field->{type} eq 'SQL_NUMBER')  {
-      $colSpec .= " NUMBER" . ($field->{prec} eq 'NA'? "" : "($field->{prec})");
-    } else { die "unrecognized SQL type: " + $field->{type}}
-    $colSpec .= $field->{isNullable} eq 'YES'? "" : " NOT NULL";
-    push(@colSpecs, $colSpec);
-  }
-  return join(",\n", @colSpecs);
-}
-
-sub bulkLoadTable {
-  my ($inputDir, $platform, $dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $schema, $tableConfig) = @_;
-
-  print STDERR "Bulk loading table $tableConfig->{name}\n";
-  if ($platform eq 'Oracle') {
-    my $controlFileName = $tableConfig->{name} . '.ctl';
-    my $dataFileName = "$inputDir/" . $tableConfig->{name} . '.cache';
-    my $logFileName = $tableConfig->{name} . '.log';
-    my $direct = $tableConfig->{is_preexisting_table}? 0 : 1;
-    writeSqlloaderCtl($tableConfig->{fields}, $schema, $tableConfig->{name}, $controlFileName, $dataFileName, !$direct);
-    my $cmdLine = getSqlLdrCmdLine($dbUser, $dbPassword, $dbHost, $dbPort, $dbName, $controlFileName, $logFileName, $direct);
-
-    unless ($DRYRUN) {
-      if (system($cmdLine)) {
-        print STDERR ">>> sqlldr execution failed: $!\n\n";
-
-        $cmdLine =~ s/\Q$dbPassword/******/gi;
-        print STDERR ">>> sqlldr failed command: $cmdLine\n\n";
-
-        print STDERR ">>> sqlldr $controlFileName file content\n\n";
-
-        open(LF, $controlFileName);
-        while (my $ctlLine = <LF>) {
-          print STDERR "$ctlLine";
-        }
-        close(LF);
-
-        my $logFileName = $tableConfig->{name} . ".log";
-
-        if (-f $logFileName) {
-          print STDERR ">>> sqlldr $logFileName file content\n\n";
-
-          open(LF, $logFileName);
-          while (my $logLine = <LF>) {
-            print STDERR "$logLine";
-          }
-          close(LF);
-        }
-
-        my $badFileName = $tableConfig->{name} . ".bad";
-
-        if (-f $badFileName) {
-          print STDERR ">>> sqllder $badFileName file content\n\n";
-
-          open(LF, $badFileName);
-          while (my $badLine = <LF>) {
-            print STDERR "$badLine";
-          }
-          close(LF);
-        }
-
-        die;
-      }
-    }
-  }
-}
-
-sub createIndex {
-  my ($dbh, $schema, $indexConfig, $indxTableSpace) = @_;
-
-  my $indexName = "$schema.$indexConfig->{name}";
-  my $colArray = $indexConfig->{orderedColumns};
-  my $cols = join(", ", @$colArray);
-  my $createIndex = "CREATE INDEX $indexName on $schema.$indexConfig->{tableName} ($cols) $indxTableSpace";
-  $dbh->do($createIndex) unless $DRYRUN;
-}
-
-sub createView {
-  my ($dbh, $schema, $viewConfig) = @_;
-
-  my $viewName = "$schema.$viewConfig->{name}";
-  my $def = $viewConfig->{definition};
-  $def =~ s/\@SCHEMA\@/$schema/g;
-  my $createView = "CREATE VIEW $viewName as $def";
-  $dbh->do($createView) unless $DRYRUN;
-}
-
-# sqlldr userid=dbuser@\"\(description=\(address=\(host=remote.db.com\)\(protocol=tcp\)\(port=1521\)\)\(connect_data=\(sid=dbsid\)\)\)\"/dbpass control=controlfilename.ctl data=data.csv
-
-sub getSqlLdrCmdLine {
-  my ($login, $password, $host, $port, $dbname, $controlFileName, $logFileName, $direct) = @_;
-
-  my $connectStr = "\"(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(Host=$host)(Port=$port))(CONNECT_DATA=(SERVICE_NAME=$dbname)))\"";
-
-  my $cmd = "sqlldr '$login/$password\@$connectStr' control=$controlFileName errors=0 discardmax=0 log=$logFileName ";
-  $cmd .= $direct?
-    "streamsize=512000 direct=TRUE" :
-    "rows=5000 bindsize=2048000 readsize=1048576";
-
-  return $cmd . ' >/dev/null 2>&1';
-}
-
-sub writeSqlloaderCtl {
-  my ($orderedFields, $schema, $tableName, $ctlFileName, $dataFileName, $append) = @_;
-
-  my @colSpecs;
-  foreach my $field (@$orderedFields) {
-    my $colSpec;
-    if ($field->{type} eq 'SQL_VARCHAR') { $colSpec = "CHAR ($field->{maxLength})"; } 
-    elsif ($field->{type} eq 'SQL_DATE') { $colSpec = "DATE 'yyyy-mm-dd hh24:mi:ss'"; }
-    elsif ($field->{type} eq 'SQL_NUMBER')  { $colSpec =  "CHAR"; }  #use default here for numbers
-    else { die "unrecognized SQL type: " + $field->{type}}
-
-    push(@colSpecs, "$field->{name} $colSpec");
-  }
-
-  my $colSpecsStr = join(",\n", @colSpecs);
-  my $appendStr = $append? "APPEND" : "";
-  open(CTL, ">$ctlFileName") || die "Can't open '$ctlFileName' for writing";
-  print CTL <<"EOF";
-     LOAD DATA
-     CHARACTERSET UTF8
-     LENGTH SEMANTICS CHAR
-     INFILE '$dataFileName'
-     $appendStr
-     INTO TABLE $schema.$tableName
-     REENABLE DISABLED_CONSTRAINTS
-     FIELDS TERMINATED BY '\\t'
-     TRAILING NULLCOLS
-    ($colSpecsStr
-    )
-EOF
-  close(CTL);
-}
