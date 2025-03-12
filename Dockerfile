@@ -46,7 +46,7 @@ COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
 
-ARG PLUGIN_SERVER_VERSION=v8.1.1
+ARG PLUGIN_SERVER_VERSION=v8.1.2
 
 # Install vdi plugin HTTP server
 RUN set -o pipefail \
