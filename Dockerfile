@@ -46,10 +46,9 @@ ARG APICOMMONDATA_COMMIT_HASH=9270a2c542f374b33deedaa60e4898e9e7479cc7 \
 COPY bin/buildGus.bash /usr/bin/buildGus.bash
 RUN /usr/bin/buildGus.bash
 
-# Install vdi plugin HTTP server
-ARG PLUGIN_SERVER_VERSION=v8.2.0-beta.4
-RUN set -o pipefail \
-    && curl "https://github.com/VEuPathDB/vdi-plugin-handler-server/releases/download/${PLUGIN_SERVER_VERSION}/docker-download.sh" -Lf --no-progress-meter | bash
+# VDI PLUGIN SERVER
+ARG PLUGIN_SERVER_VERSION=v1.7.0-b.1
+RUN curl "https://github.com/VEuPathDB/vdi-service/releases/download/${PLUGIN_SERVER_VERSION}/plugin-server.tar.gz" -Lf --no-progress-meter | tar -xz
 
 COPY bin /opt/veupathdb/bin/
 COPY lib/xml/* /usr/local/lib/xml/
